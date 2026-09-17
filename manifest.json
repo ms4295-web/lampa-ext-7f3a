@@ -1,0 +1,15 @@
+{
+  "name": "ms4295-plugin",
+  "description": "Empty Lampa / Lampac NextGen plugin template",
+  "version": "1.0.0",
+  "author": "ms4295-web",
+  "homepage": "https://github.com/ms4295-web/ms4295-plugin",
+  "main": "plugin.js",
+  "keywords": [
+    "lampa",
+    "lampac",
+    "plugin",
+    "smart-tv"
+  ],
+  "license": "MIT"
+}
