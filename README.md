@@ -1,82 +1,139 @@
 # ms4295-plugin
 
-Пустой каркас JS-плагина для [Lampa](https://github.com/yumata/lampa) /
-[Lampac NextGen](https://github.com/lampac-nextgen/lampac).
+Форк плагина **hdpoisk** для [Lampa](https://github.com/yumata/lampa) / [Lampac NextGen](https://github.com/lampac-nextgen/lampac).
 
-## Структура
+| | |
+| --- | --- |
+| **Оригинал** | https://udemika.github.io/wich/hdpoisk.js |
+| **Автор оригинала** | `udemika` |
+| **Размер** | ~128 КБ (2372 строки исходника) |
+| **Лицензия** | MIT |
 
-```
-.
-├── plugin.js     # сам плагин (точка входа — startPlugin())
-├── manifest.json # метаданные для каталогов плагинов (опционально)
-└── README.md
-```
+> Код скопирован **без изменений**, добавлен только заголовок с указанием авторства.
+> Весь функционал принадлежит оригинальному автору.
+
+---
 
 ## Подключение
 
-### Вариант 1 — напрямую в Lampa
-
-1. Откройте Lampa → **Настройки** → **Плагины**.
-2. **Добавить плагин** → вставьте URL:
-   ```
-   https://raw.githubusercontent.com/ms4295-web/ms4295-plugin/main/plugin.js
-   ```
-3. Перезапустите Lampa.
-
-> Если включён GitHub Pages, доступен и более стабильный адрес:
-> `https://ms4295-web.github.io/ms4295-plugin/plugin.js`
-
-### Вариант 2 — через Lampac NextGen
-
-Положите файл в каталог плагинов Lampac:
+### URL плагина
 
 ```
-/lampac/plugins/override/ms4295-plugin.js
+https://raw.githubusercontent.com/ms4295-web/ms4295-plugin/main/plugin.js
 ```
 
-Для Docker — примонтируйте томом в `docker-compose.yaml`:
+Стабильный вариант через GitHub Pages (сборка занимает 1-5 минут после первого пуша):
+
+```
+https://ms4295-web.github.io/ms4295-plugin/plugin.js
+```
+
+### В Lampa
+
+1. `Настройки` -> `Плагины` -> `Добавить плагин`
+2. Вставить URL выше
+3. Перезапустить Lampa
+4. В настройках появятся разделы **IPTV Skaz** и **Lampac Skaz**
+
+### В Lampac NextGen (Docker)
+
+```bash
+mkdir -p lampac-docker/plugins
+curl -o lampac-docker/plugins/hdpoisk.js \
+  https://raw.githubusercontent.com/ms4295-web/ms4295-plugin/main/plugin.js
+```
 
 ```yaml
 services:
   lampac:
     image: ghcr.io/lampac-nextgen/lampac
     volumes:
-      - ./lampac-docker/plugins/ms4295-plugin.js:/lampac/plugins/override/ms4295-plugin.js
+      - ./lampac-docker/plugins/hdpoisk.js:/lampac/plugins/hdpoisk.js
 ```
 
-После этого плагин будет доступен по адресу
-`http://<IP>:9118/ms4295-plugin.js` — его и можно добавить в Lampa.
+---
 
-## Что уже есть в каркасе
+## Что внутри
 
-- `Lampa.Lang.add()` — переводы (ru / en / uk / be).
-- `Lampa.SettingsApi.addComponent()` + `addParam()` — собственный раздел
-  в настройках Lampa с переключателем «Включить плагин».
-- `Lampa.Listener.follow('full', ...)` — хук на открытие карточки фильма.
-- `Lampa.Listener.follow('app', ...)` — хук на старт приложения.
-- Защита от двойной инициализации через `window.ms4295_plugin`.
+Плагин подключает несколько платных онлайн-источников и автоматически ротирует учётные записи при исчерпании лимита.
 
-## Полезные API
+| Источник | Хосты | Механизм |
+| --- | --- | --- |
+| **Skaz** | `online3.skaz.tv`, `online4.skaz.tv`, `online5.skaz.tv`, `onlinecf3-5.skaz.tv`, `skaztv.top` | ротация 3 аккаунтов (`SKAZ_ACCOUNTS`) |
+| **AB2024** | `ab2024.ru` | ротация токенов (`AB_TOKENS`) |
+| **HDpoisk** | `hdpoisk.ru` | статический `TOKEN` |
+| **Showy** | `wtch.ch`, `89.110.97.220:10254` | ротация зеркал (`MIRRORS_SHOWY`) |
+| **Прочее** | `lampaua.mooo.com`, `beta.l-vid.online`, `148.135.207.174` | резервные зеркала |
 
-| API | Назначение |
-| --- | --- |
-| `Lampa.Storage.field(name)` / `.set(name, value)` | чтение и запись настроек |
-| `Lampa.Template.add(name, html)` / `.get(name, vars, plain)` | HTML-шаблоны |
-| `Lampa.Controller.add(name, {...})` / `.toggle(name)` | управление фокусом с пульта |
-| `Lampa.Activity.active()` | текущая активность |
-| `Lampa.Noty.show(text)` | всплывающее уведомление |
-| `Lampa.Api.sources.tmdb.get(method, params, onOk, onErr)` | запросы к TMDB |
-| `Lampa.Lang.translate(key)` | получить перевод |
+Ключевые переменные находятся в самом начале файла:
 
-## Ключевые точки для правки
+```js
+var connection_source   = 'ab2024';   // активный источник по умолчанию
+var AB_TOKENS           = [ ... ];    // токены AB2024
+var MIRRORS_SHOWY       = [ ... ];    // зеркала Showy
+var SKAZ_ACCOUNTS       = [ ... ];    // аккаунты Skaz
+var current_ab_token_index   = 0;
+var current_showy_index      = 0;
+```
 
-| Где | Что менять |
-| --- | --- |
-| `PLUGIN_KEY` в `plugin.js` | уникальный ключ плагина (сейчас `ms4295_plugin`) |
-| `Lampa.Lang.add({...})` | тексты и переводы |
-| `icon` | SVG-иконка в настройках |
-| `Lampa.Listener.follow('full', ...)` | логика на карточке фильма |
+---
 
-## Лицензия
+## Редактирование
 
-MIT
+Репозиторий ваш - правьте прямо в веб-интерфейсе GitHub (карандаш на файле `plugin.js`) или клонируйте локально:
+
+```bash
+git clone https://github.com/ms4295-web/ms4295-plugin.git
+```
+
+Файл **минифицирован частично** и содержит длинные строки (до 6119 символов). Для удобной правки:
+
+1. Прогнать через форматтер - `npx prettier --write plugin.js`
+2. Либо открыть в VS Code и использовать `Alt+Z` (перенос строк)
+
+После пуша в `main` изменения подхватываются сразу - `raw.githubusercontent.com` обновляется мгновенно, GitHub Pages через 1-2 минуты.
+
+> **Кэш:** Lampa кэширует плагины. После обновления очистите кэш или добавьте `?v=2` к URL для проверки.
+
+---
+
+## Структура репозитория
+
+```
+ms4295-plugin/
+├── plugin.js        # сам плагин (hdpoisk + заголовок авторства)
+├── manifest.json    # метаданные
+├── README.md        # этот файл
+└── .gitignore
+```
+
+Первоначальный пустой каркас сохранён в истории git (коммит `7b1eaf9`) - вернуть:
+
+```bash
+git checkout 7b1eaf9 -- plugin.js
+```
+
+---
+
+## Предупреждение
+
+Репозиторий **публичный**. Плагин содержит учётные данные сторонних сервисов и даёт доступ к платному контенту. Возможны:
+
+- DMCA takedown от правообладателей сервисов
+- блокировка репозитория или аккаунта GitHub
+- отзыв учётных данных автором оригинала в любой момент
+
+Если это критично - сделайте репозиторий приватным (`Settings` -> `Danger Zone` -> `Change visibility`). Для подключения из Lampa приватный репозиторий тоже работает, но потребуется токен в URL:
+
+```
+https://<TOKEN>@raw.githubusercontent.com/ms4295-web/ms4295-plugin/main/plugin.js
+```
+
+---
+
+## Ссылки
+
+- Оригинал: https://udemika.github.io/wich/hdpoisk.js
+- Lampa: https://github.com/yumata/lampa
+- Lampac NextGen: https://github.com/lampac-nextgen/lampac
+- Документация Lampac: https://docs.lampac.dev
