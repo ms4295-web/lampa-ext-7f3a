@@ -1,15 +1,11 @@
 {
   "name": "ms4295-plugin",
-  "description": "Empty Lampa / Lampac NextGen plugin template",
+  "title": "hdpoisk (fork)",
   "version": "1.0.0",
-  "author": "ms4295-web",
+  "description": "Fork of hdpoisk.js - Skaz / AB2024 / HDpoisk / Showy online source plugin for Lampa.",
+  "author": "udemika (original) / ms4295-web (fork)",
   "homepage": "https://github.com/ms4295-web/ms4295-plugin",
   "main": "plugin.js",
-  "keywords": [
-    "lampa",
-    "lampac",
-    "plugin",
-    "smart-tv"
-  ],
+  "size": 127894,
   "license": "MIT"
 }
