@@ -19,13 +19,13 @@
 ### URL плагина
 
 ```
-https://raw.githubusercontent.com/ms4295-web/ms4295-plugin/main/plugin.js
+https://raw.githubusercontent.com/ms4295-web/lampa-ext-7f3a/main/plugin.js
 ```
 
 Стабильный вариант через GitHub Pages (сборка занимает 1-5 минут после первого пуша):
 
 ```
-https://ms4295-web.github.io/ms4295-plugin/plugin.js
+https://ms4295-web.github.io/lampa-ext-7f3a/plugin.js
 ```
 
 ### В Lampa
@@ -40,7 +40,7 @@ https://ms4295-web.github.io/ms4295-plugin/plugin.js
 ```bash
 mkdir -p lampac-docker/plugins
 curl -o lampac-docker/plugins/hdpoisk.js \
-  https://raw.githubusercontent.com/ms4295-web/ms4295-plugin/main/plugin.js
+  https://raw.githubusercontent.com/ms4295-web/lampa-ext-7f3a/main/plugin.js
 ```
 
 ```yaml
@@ -83,7 +83,7 @@ var current_showy_index      = 0;
 Репозиторий ваш - правьте прямо в веб-интерфейсе GitHub (карандаш на файле `plugin.js`) или клонируйте локально:
 
 ```bash
-git clone https://github.com/ms4295-web/ms4295-plugin.git
+git clone https://github.com/ms4295-web/lampa-ext-7f3a.git
 ```
 
 Файл **минифицирован частично** и содержит длинные строки (до 6119 символов). Для удобной правки:
@@ -126,7 +126,7 @@ git checkout 7b1eaf9 -- plugin.js
 Если это критично - сделайте репозиторий приватным (`Settings` -> `Danger Zone` -> `Change visibility`). Для подключения из Lampa приватный репозиторий тоже работает, но потребуется токен в URL:
 
 ```
-https://<TOKEN>@raw.githubusercontent.com/ms4295-web/ms4295-plugin/main/plugin.js
+https://<TOKEN>@raw.githubusercontent.com/ms4295-web/lampa-ext-7f3a/main/plugin.js
 ```
 
 ---
