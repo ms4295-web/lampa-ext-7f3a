@@ -1,4 +1,4 @@
-# ms4295-plugin
+# lampa-ext-7f3a
 
 Форк плагина **hdpoisk** для [Lampa](https://github.com/yumata/lampa) / [Lampac NextGen](https://github.com/lampac-nextgen/lampac).
 
@@ -100,7 +100,7 @@ git clone https://github.com/ms4295-web/lampa-ext-7f3a.git
 ## Структура репозитория
 
 ```
-ms4295-plugin/
+lampa-ext-7f3a/
 ├── plugin.js        # сам плагин (hdpoisk + заголовок авторства)
 ├── manifest.json    # метаданные
 ├── README.md        # этот файл
