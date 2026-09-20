@@ -80,6 +80,30 @@ https://ms4295-web.github.io/lampa-ext-7f3a/quality-filter.js
 
 ---
 
+## Country Filter (третий плагин)
+
+Отдельный плагин `country-filter.js` — прячет карточки контента из выбранных стран
+во всех списках Lampa (каталоги, рекомендации, поиск, история):
+
+- страны по умолчанию: **Корея, Китай, Турция, Индия, Пакистан, Афганистан**;
+- каждую страну можно отдельно включить/выключить;
+- дополнительная настройка — фильтр по языку оригинала;
+- настройки: `Настройки` -> `Фильтр стран`.
+
+### URL плагина
+
+```
+https://raw.githubusercontent.com/ms4295-web/lampa-ext-7f3a/main/country-filter.js
+```
+
+Через GitHub Pages:
+
+```
+https://ms4295-web.github.io/lampa-ext-7f3a/country-filter.js
+```
+
+---
+
 ## Что внутри
 
 Плагин подключает несколько платных онлайн-источников и автоматически ротирует учётные записи при исчерпании лимита.
@@ -130,6 +154,7 @@ git clone https://github.com/ms4295-web/lampa-ext-7f3a.git
 lampa-ext-7f3a/
 ├── plugin.js           # плагин hdpoisk (источники онлайн)
 ├── quality-filter.js   # плагин: фильтр качества видео (от 1080p)
+├── country-filter.js   # плагин: фильтр стран контента
 ├── manifest.json       # метаданные
 ├── README.md           # этот файл
 └── .gitignore
