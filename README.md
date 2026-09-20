@@ -48,7 +48,34 @@ services:
   lampac:
     image: ghcr.io/lampac-nextgen/lampac
     volumes:
-      - ./lampac-docker/plugins/hdpoisk.js:/lampac/plugins/hdpoisk.js
+          - ./lampac-docker/plugins/hdpoisk.js:/lampac/plugins/hdpoisk.js
+```
+
+---
+
+## Quality Filter (второй плагин)
+
+Отдельный плагин `quality-filter.js` — отсекает качество видео ниже выбранного порога
+(по умолчанию 1080p):
+
+- убирает низкие качества из списка качеств в плеере (работает для всех источников:
+  встроенный онлайн, плагины, IPTV);
+- прячет карточки видео в списках онлайн-компонентов с качеством ниже порога;
+- настройки: `Настройки` -> `Фильтр качества` (включение и выбор порога:
+  720p / 1080p / 1440p / 2160p).
+
+Если у видео все качества ниже порога — список не меняется, воспроизведение не ломается.
+
+### URL плагина
+
+```
+https://raw.githubusercontent.com/ms4295-web/lampa-ext-7f3a/main/quality-filter.js
+```
+
+Через GitHub Pages:
+
+```
+https://ms4295-web.github.io/lampa-ext-7f3a/quality-filter.js
 ```
 
 ---
@@ -101,9 +128,10 @@ git clone https://github.com/ms4295-web/lampa-ext-7f3a.git
 
 ```
 lampa-ext-7f3a/
-├── plugin.js        # сам плагин (hdpoisk + заголовок авторства)
-├── manifest.json    # метаданные
-├── README.md        # этот файл
+├── plugin.js           # плагин hdpoisk (источники онлайн)
+├── quality-filter.js   # плагин: фильтр качества видео (от 1080p)
+├── manifest.json       # метаданные
+├── README.md           # этот файл
 └── .gitignore
 ```
 
