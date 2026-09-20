@@ -104,6 +104,59 @@ https://ms4295-web.github.io/lampa-ext-7f3a/country-filter.js
 
 ---
 
+## YouTube (четвёртый плагин)
+
+Отдельный плагин `youtube-plugin.js` — просмотр YouTube с авторизацией через
+**личный аккаунт Google** (OAuth 2.0, device flow):
+
+- разделы: **Подписки** (каналы и их свежие видео), **Понравившиеся**,
+  **Смотреть позже**, **История**, **Поиск**;
+- воспроизведение через встроенный YouTube-плеер Lampa с поддержкой плейлиста;
+- в главном меню появляется пункт **YouTube**;
+- настройки: `Настройки` -> `YouTube`.
+
+### Подготовка (один раз)
+
+Нужен собственный **OAuth Client ID** (бесплатно, Google Cloud Console):
+
+1. Откройте [console.cloud.google.com](https://console.cloud.google.com) и войдите
+   в Google-аккаунт
+2. Создайте проект (или выберите существующий)
+3. **APIs & Services** → **Library** → включите **YouTube Data API v3**
+4. **APIs & Services** → **OAuth consent screen** → тип **External**, заполните
+   название и email
+5. **Credentials** → **Create credentials** → **OAuth client ID**
+6. Тип приложения: **TVs and Limited Input devices**
+7. Скопируйте **Client ID**
+
+> Та же инструкция доступна внутри настроек плагина (кнопка
+> «Как получить Client ID»).
+
+### Использование
+
+1. Установите плагин (URL ниже), перезапустите Lampa
+2. `Настройки` → `YouTube` → вставьте **OAuth Client ID**
+3. Нажмите **«Войти в аккаунт YouTube»**, откройте на телефоне/компьютере
+   `google.com/device` и введите показанный код
+4. Пункт **YouTube** в главном меню
+
+> Токен хранится только на устройстве, API используется только для получения
+> списков видео.
+
+### URL плагина
+
+```
+https://raw.githubusercontent.com/ms4295-web/lampa-ext-7f3a/main/youtube-plugin.js
+```
+
+Через GitHub Pages:
+
+```
+https://ms4295-web.github.io/lampa-ext-7f3a/youtube-plugin.js
+```
+
+---
+
 ## Что внутри
 
 Плагин подключает несколько платных онлайн-источников и автоматически ротирует учётные записи при исчерпании лимита.
@@ -155,6 +208,7 @@ lampa-ext-7f3a/
 ├── plugin.js           # плагин hdpoisk (источники онлайн)
 ├── quality-filter.js   # плагин: фильтр качества видео (от 1080p)
 ├── country-filter.js   # плагин: фильтр стран контента
+├── youtube-plugin.js   # плагин: YouTube с авторизацией аккаунта Google
 ├── manifest.json       # метаданные
 ├── README.md           # этот файл
 └── .gitignore
