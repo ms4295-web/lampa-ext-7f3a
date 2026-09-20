@@ -62,9 +62,8 @@ services:
 | **Skaz** | `online3.skaz.tv`, `online4.skaz.tv`, `online5.skaz.tv`, `onlinecf3-5.skaz.tv`, `skaztv.top` | ротация 3 аккаунтов (`SKAZ_ACCOUNTS`) |
 | **AB2024** | `ab2024.ru` | ротация токенов (`AB_TOKENS`) |
 | **Showy** | `wtch.ch`, `89.110.97.220:10254` | ротация зеркал (`MIRRORS_SHOWY`) |
-| **OkeanTV** | `148.135.207.174:12359` | статический `uid=guest` |
 
-> Удалены неработающие источники: **HD Poisk** (`hdpoisk.ru`), **LampaUA** (`lampaua.mooo.com`), **Beta L-Vid** (`beta.l-vid.online`).
+> Удалены неработающие источники: **HD Poisk** (`hdpoisk.ru`), **LampaUA** (`lampaua.mooo.com`), **Beta L-Vid** (`beta.l-vid.online`), **OkeanTV** (`148.135.207.174:12359`).
 
 Ключевые переменные находятся в самом начале файла:
 

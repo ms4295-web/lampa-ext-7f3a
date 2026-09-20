@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- *  Plugin: hdpoisk (Skaz / AB2024 / Showy / OkeanTV)
+ *  Plugin: hdpoisk (Skaz / AB2024 / Showy)
  * ----------------------------------------------------------------------------
  *  Origin        : https://udemika.github.io/wich/hdpoisk.js
  *  Original author: udemika
@@ -61,8 +61,6 @@
     function getHost() {
         if (connection_source === 'ab2024') return 'https://ab2024.ru/';
         if (connection_source === 'showy') return MIRRORS_SHOWY[current_showy_index];
-        if (connection_source === 'okeantv') return 'http://148.135.207.174:12359/';
-
         return randomUrl; // Skaz
     }
 
@@ -294,12 +292,6 @@
                 url = Lampa.Utils.addUrlComponent(url, 'showy_token=f8377057-90eb-4d76-93c9-7605952a096l');
             }
         }
-        else if (connection_source === 'okeantv') {
-            // Логика OkeanTV
-            if (url.indexOf('uid=') === -1) {
-                url = Lampa.Utils.addUrlComponent(url, 'uid=guest');
-            }
-        }
         else {
             // Логика Skaz с ротацией
             var skaz_acc = SKAZ_ACCOUNTS[current_skaz_account_index];
@@ -426,7 +418,6 @@
                         if (b.index === 0) connection_source = 'ab2024';
                         else if (b.index === 1) connection_source = 'showy';
                         else if (b.index === 2) connection_source = 'skaz';
-                        else if (b.index === 3) connection_source = 'okeantv';
                         else connection_source = 'skaz';
                         
                         // Сброс и перезагрузка
@@ -1226,7 +1217,6 @@
             var current_sub = '';
             if (connection_source === 'ab2024') current_sub = 'https://ab2024.ru';
             else if (connection_source === 'showy') current_sub = MIRRORS_SHOWY[0];
-            else if (connection_source === 'okeantv') current_sub = 'cdn.okeantv.fun';
             else current_sub = randomUrl;
 
             select.push({
@@ -1235,8 +1225,7 @@
                 items: [
                     { title: 'AB2024', selected: connection_source === 'ab2024', index: 0 },
                     { title: 'Showy', selected: connection_source === 'showy', index: 1 },
-                    { title: 'Skaz TV', selected: connection_source === 'skaz', index: 2 },
-                    { title: 'cdn.okeantv.fun', selected: connection_source === 'okeantv', index: 3 }
+                    { title: 'Skaz TV', selected: connection_source === 'skaz', index: 2 }
                 ],
                 stype: 'connection'
             });
