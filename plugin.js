@@ -1,12 +1,13 @@
 /**
  * ============================================================================
- *  Plugin: hdpoisk (Skaz / AB2024 / HDpoisk / Showy)
+ *  Plugin: hdpoisk (Skaz / AB2024 / Showy / OkeanTV)
  * ----------------------------------------------------------------------------
  *  Origin        : https://udemika.github.io/wich/hdpoisk.js
  *  Original author: udemika
  *  Mirror        : https://github.com/ms4295-web/ms4295-plugin
  *
- *  Code copied UNMODIFIED for personal editing.
+ *  Code copied from the original, non-working online sources removed
+ *  (HD Poisk, LampaUA, Beta L-Vid) for personal editing.
  *  All credit for functionality belongs to the original author.
  *
  *  NOTE: this plugin contains hardcoded third-party service credentials.
@@ -36,21 +37,6 @@
     ];
     var current_skaz_account_index = 0;
 
-    // LampaUA Accounts Rotation
-    var LAMPAUA_UIDS = ['guest'];
-    var current_lampaua_index = 0;
-
-    // Beta L-Vid Accounts Rotation
-    var BETA_UIDS = [
-        'eis3ey9m',
-        'p8825724-9005-428a-9d86-a466c13ddff3',
-        'y9725724-9005-428a-9d86-a466c13ddcc4'
-    ];
-    var current_beta_index = 0;
-
-    // HD Poisk Config
-    var HDPOISK_TOKEN = '720fbdfd04f4cb54579a9875fd9289';
-
     // Skaz (Инициализация зеркал)
     var cf = Lampa.Storage.get('skazonline_servers');
     if (cf == true) {
@@ -76,9 +62,7 @@
         if (connection_source === 'ab2024') return 'https://ab2024.ru/';
         if (connection_source === 'showy') return MIRRORS_SHOWY[current_showy_index];
         if (connection_source === 'okeantv') return 'http://148.135.207.174:12359/';
-        if (connection_source === 'hdpoisk') return 'https://hdpoisk.ru/';
-        if (connection_source === 'lampaua') return 'https://cors.lampa.stream/http://lampaua.mooo.com/';
-        if (connection_source === 'beta') return 'http://beta.l-vid.online:888/';
+
         return randomUrl; // Skaz
     }
 
@@ -316,32 +300,6 @@
                 url = Lampa.Utils.addUrlComponent(url, 'uid=guest');
             }
         }
-        else if (connection_source === 'hdpoisk') {
-            // Логика HD Poisk - API URL формируется в requestParams
-        }
-        else if (connection_source === 'lampaua') {
-            // Логика LampaUA
-            var lampaua_uid = LAMPAUA_UIDS[current_lampaua_index];
-            if (url.indexOf('uid=') === -1) {
-                url = Lampa.Utils.addUrlComponent(url, 'uid=' + lampaua_uid);
-            } else {
-                url = url.replace(/uid=([^&]+)/, 'uid=' + lampaua_uid);
-            }
-
-            // --- ДОБАВЛЕНИЕ ПРОКСИ ДЛЯ LAMPAUA (ЕСЛИ ЗАПРОС ИДЕТ НА ОСНОВНОЙ ДОМЕН) ---
-            if (url.indexOf('lampaua.mooo.com') !== -1 && url.indexOf('cors.lampa.stream') === -1) {
-                url = 'https://cors.lampa.stream/' + url;
-            }
-        }
-        else if (connection_source === 'beta') {
-            // Логика Beta
-            var beta_uid = BETA_UIDS[current_beta_index];
-            if (url.indexOf('uid=') === -1) {
-                url = Lampa.Utils.addUrlComponent(url, 'uid=' + beta_uid);
-            } else {
-                url = url.replace(/uid=([^&]+)/, 'uid=' + beta_uid);
-            }
-        }
         else {
             // Логика Skaz с ротацией
             var skaz_acc = SKAZ_ACCOUNTS[current_skaz_account_index];
@@ -355,15 +313,13 @@
         }
 
         // Общие параметры
-        if (connection_source !== 'hdpoisk') { 
-            if (url.indexOf('token=') == -1) {
-                var token = '';
-                if (token != '') url = Lampa.Utils.addUrlComponent(url, 'token=');
-            }
-            if (url.indexOf('nws_id=') == -1 && window.rch_nws && window.rch_nws[hostkey]) {
-                var nws_id = window.rch_nws[hostkey].connectionId || Lampa.Storage.get('lampac_nws_id', '');
-                if (nws_id) url = Lampa.Utils.addUrlComponent(url, 'nws_id=' + encodeURIComponent(nws_id));
-            }
+        if (url.indexOf('token=') == -1) {
+            var token = '';
+            if (token != '') url = Lampa.Utils.addUrlComponent(url, 'token=');
+        }
+        if (url.indexOf('nws_id=') == -1 && window.rch_nws && window.rch_nws[hostkey]) {
+            var nws_id = window.rch_nws[hostkey].connectionId || Lampa.Storage.get('lampac_nws_id', '');
+            if (nws_id) url = Lampa.Utils.addUrlComponent(url, 'nws_id=' + encodeURIComponent(nws_id));
         }
         return url;
     }
@@ -404,16 +360,12 @@
         Defined.localhost = getHost();
 
         if (balansers_with_search == undefined) {
-            if (connection_source !== 'hdpoisk') {
-                network.timeout(10000);
-                network.silent(account(Defined.localhost + 'lite/withsearch'), function(json) {
-                    balansers_with_search = json;
-                }, function() {
-                    balansers_with_search = [];
-                });
-            } else {
-                 balansers_with_search = [];
-            }
+            network.timeout(10000);
+            network.silent(account(Defined.localhost + 'lite/withsearch'), function(json) {
+                balansers_with_search = json;
+            }, function() {
+                balansers_with_search = [];
+            });
         }
 
         function balanserName(j) {
@@ -475,9 +427,6 @@
                         else if (b.index === 1) connection_source = 'showy';
                         else if (b.index === 2) connection_source = 'skaz';
                         else if (b.index === 3) connection_source = 'okeantv';
-                        else if (b.index === 4) connection_source = 'hdpoisk';
-                        else if (b.index === 5) connection_source = 'lampaua';
-                        else if (b.index === 6) connection_source = 'beta';
                         else connection_source = 'skaz';
                         
                         // Сброс и перезагрузка
@@ -580,15 +529,9 @@
                     if (object.movie.kinopoisk_id) query.push('kinopoisk_id=' + (object.movie.kinopoisk_id || ''));
                     var url = Defined.localhost + 'externalids?' + query.join('&');
                     
-                    if (connection_source === 'hdpoisk') {
-                         resolve();
-                         return;
-                    }
-                    
-                    var headers = {};
-                    if(connection_source !== 'hdpoisk') {
-                         headers['X-Kit-AesGcm'] = Lampa.Storage.get('aesgcmkey', '');
-                    }
+                    var headers = {
+                        'X-Kit-AesGcm': Lampa.Storage.get('aesgcmkey', '')
+                    };
 
                     network.timeout(10000);
                     network.silent(account(url), function(json) {
@@ -619,11 +562,6 @@
             Lampa.Activity.replace();
         };
         this.requestParams = function(url) {
-            // ДЛЯ HD POISK НАПРАВЛЯЕМ ЗАПРОС API ЧЕРЕЗ НАШ СЕРВЕР
-            if (connection_source === 'hdpoisk') {
-                var myVpsIp = '108.165.164.64';
-                return 'http://' + myVpsIp + ':3000/api?kp=' + (object.movie.kinopoisk_id || object.movie.id);
-            }
 
             var query = [];
             var card_source = object.movie.source || 'tmdb'; 
@@ -760,11 +698,6 @@
         // ВОЗВРАЩАЕМ ЗАПРОС LITE/EVENTS
         this.createSource = function() {
             var _this4 = this;
-            if (connection_source === 'hdpoisk') {
-                return new Promise(function(resolve, reject){
-                     _this4.startSource([{name: 'HDPoisk', url: 'hdpoisk_api', show: true}]).then(resolve);
-                });
-            }
 
             return new Promise(function(resolve, reject) {
                 var url = _this4.requestParams(Defined.localhost + 'lite/events?life=true');
@@ -813,10 +746,9 @@
             function runRequest() {
                 number_of_requests++;
                 if (number_of_requests < 10) {
-                    var headers = {};
-                    if (connection_source !== 'hdpoisk') {
-                         headers['X-Kit-AesGcm'] = Lampa.Storage.get('aesgcmkey', '');
-                    }
+                    var headers = {
+                        'X-Kit-AesGcm': Lampa.Storage.get('aesgcmkey', '')
+                    };
 
                     network["native"](account(url), _this.parse.bind(_this), function(e) {
                         // Обработка ошибки с ротацией для Skaz
@@ -824,18 +756,6 @@
                             console.log('Skaz: Auth failed, rotating to next account', current_skaz_account_index + 1);
                             current_skaz_account_index++;
                             // Рекурсивный вызов, который снова инициирует wakeUp для нового аккаунта
-                            _this.request(url);
-                        } 
-                        // Обработка ошибки с ротацией для LampaUA
-                        else if (connection_source === 'lampaua' && current_lampaua_index < LAMPAUA_UIDS.length - 1) {
-                            console.log('LampaUA: Request failed, rotating to next account', current_lampaua_index + 1);
-                            current_lampaua_index++;
-                            _this.request(url);
-                        }
-                        // Обработка ошибки с ротацией для Beta
-                        else if (connection_source === 'beta' && current_beta_index < BETA_UIDS.length - 1) {
-                            console.log('Beta: Request failed, rotating to next account', current_beta_index + 1);
-                            current_beta_index++;
                             _this.request(url);
                         } else {
                             _this.doesNotAnswer.bind(_this)(e);
@@ -908,37 +828,6 @@
         this.getFileUrl = function(file, call, waiting_rch) {
             var _this = this;
 
-            // --- ЛОГИКА ДЛЯ HD POISK (ОБРАЩЕНИЕ К НАШЕМУ ПРОКСИ) ---
-            if (connection_source === 'hdpoisk') {
-                Lampa.Loading.start(function() {
-                    Lampa.Loading.stop();
-                    Lampa.Controller.toggle('content');
-                    network.clear();
-                });
-                
-                // ЗАМЕНИ НА IP ТВОЕГО VPS! Порт 3000 мы задали в server.js
-                var myVpsIp = '62.60.152.164'; 
-                var extractorUrl = 'http://' + myVpsIp + ':3000/extract?url=' + encodeURIComponent(file.url);
-
-                network.silent(extractorUrl, function(json) {
-                    Lampa.Loading.stop();
-                    if (json && json.url) {
-                        call({ url: json.url }, {});
-                    } else {
-                        Lampa.Noty.show('Сервер не смог извлечь видео');
-                        call(false, {});
-                    }
-                }, function(a, c) {
-                    Lampa.Loading.stop();
-                    Lampa.Noty.show('Ошибка соединения с прокси-сервером');
-                    call(false, {});
-                }, false, {
-                    dataType: 'json'
-                });
-                
-                return;
-            }
-            // ---------------------------------------- 
             if (Lampa.Storage.field('player') !== 'inner' && file.stream && Lampa.Platform.is('apple')) {
                 var newfile = Lampa.Arrays.clone(file);
                 newfile.method = 'play';
@@ -955,7 +844,6 @@
                 var headers = {
                     'X-Kit-AesGcm': Lampa.Storage.get('aesgcmkey', '')
                 };
-                if(connection_source === 'hdpoisk') headers = {};
 
                 network["native"](account(file.url), function(json) {
                     if (json.rch) {
@@ -1130,62 +1018,6 @@
             var json = Lampa.Arrays.decodeJson(str, {});
             if (Lampa.Arrays.isObject(str) && str.rch) json = str;
             if (json.rch) return this.rch(json);
-
-            // --- ПАРСЕР ДЛЯ HD POISK ---
-            if (connection_source === 'hdpoisk') {
-                this.activity.loader(false);
-                if (json.data) {
-                    var items = [];
-                    if (json.data.seasons) {
-                        for (var s in json.data.seasons) {
-                            var season = json.data.seasons[s];
-                            if (season.episodes) {
-                                for (var e in season.episodes) {
-                                    var episode = season.episodes[e];
-                                    var item = {
-                                        season: parseInt(season.season),
-                                        episode: parseInt(episode.episode),
-                                        title: 'S' + season.season + 'E' + episode.episode,
-                                        text: 'S' + season.season + 'E' + episode.episode,
-                                        url: episode.iframe,
-                                        method: 'call',
-                                        voice_name: 'Original',
-                                        quality: {}
-                                    };
-                                    items.push(item);
-                                }
-                            }
-                        }
-                    } 
-                    else if (json.data.iframe) {
-                        var item = {
-                            title: json.data.name || object.movie.title,
-                            text: object.movie.title,
-                            url: json.data.iframe,
-                            method: 'call',
-                            quality: {}
-                        };
-                        items.push(item);
-                    }
-
-                    if (items.length) {
-                        items.sort(function(a, b) {
-                            if (a.season > b.season) return 1;
-                            if (a.season < b.season) return -1;
-                            if (a.episode > b.episode) return 1;
-                            if (a.episode < b.episode) return -1;
-                            return 0;
-                        });
-                        this.display(items);
-                    } else {
-                        this.empty();
-                    }
-                } else {
-                    this.empty();
-                }
-                return;
-            }
-            // -----------------------------
 
             try {
                 var items = this.parseJsonDate(str, '.videos__item');
@@ -1395,9 +1227,6 @@
             if (connection_source === 'ab2024') current_sub = 'https://ab2024.ru';
             else if (connection_source === 'showy') current_sub = MIRRORS_SHOWY[0];
             else if (connection_source === 'okeantv') current_sub = 'cdn.okeantv.fun';
-            else if (connection_source === 'hdpoisk') current_sub = 'https://hdpoisk.ru/';
-            else if (connection_source === 'lampaua') current_sub = 'http://lampaua.mooo.com/';
-            else if (connection_source === 'beta') current_sub = 'http://beta.l-vid.online:888/';
             else current_sub = randomUrl;
 
             select.push({
@@ -1407,10 +1236,7 @@
                     { title: 'AB2024', selected: connection_source === 'ab2024', index: 0 },
                     { title: 'Showy', selected: connection_source === 'showy', index: 1 },
                     { title: 'Skaz TV', selected: connection_source === 'skaz', index: 2 },
-                    { title: 'cdn.okeantv.fun', selected: connection_source === 'okeantv', index: 3 },
-                    { title: 'HD Poisk', selected: connection_source === 'hdpoisk', index: 4 },
-                    { title: 'LampaUA', selected: connection_source === 'lampaua', index: 5 },
-                    { title: 'Beta L-Vid', selected: connection_source === 'beta', index: 6 }
+                    { title: 'cdn.okeantv.fun', selected: connection_source === 'okeantv', index: 3 }
                 ],
                 stype: 'connection'
             });

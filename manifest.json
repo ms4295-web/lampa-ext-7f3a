@@ -2,10 +2,10 @@
   "name": "ms4295-plugin",
   "title": "hdpoisk (fork)",
   "version": "1.0.0",
-  "description": "Fork of hdpoisk.js - Skaz / AB2024 / HDpoisk / Showy online source plugin for Lampa.",
+  "description": "Fork of hdpoisk.js - Skaz / AB2024 / Showy / OkeanTV online source plugin for Lampa.",
   "author": "udemika (original) / ms4295-web (fork)",
   "homepage": "https://github.com/ms4295-web/ms4295-plugin",
   "main": "plugin.js",
-  "size": 127894,
+  "size": 118747,
   "license": "MIT"
 }
