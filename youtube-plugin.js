@@ -1,15 +1,19 @@
 /**
  * ============================================================================
- *  Plugin: YouTube (с личным аккаунтом Google)
+ *  Plugin: YouTube — полноценный клиент на базе Piped + cobalt
  * ----------------------------------------------------------------------------
- *  Просмотр YouTube в Lampa с авторизацией через личный аккаунт:
+ *  Контент (без аккаунта и ключей): публичный API Piped
+ *    - Главная: тренды по региону
+ *    - Поиск видео и каналов (с подгрузкой следующих страниц)
+ *    - Страница видео: описание, канал, похожие видео, комментарии
+ *    - Страница канала: видео/Shorts/стримы
  *
- *    - подписки (каналы -> свежие видео), понравившиеся, смотреть позже,
- *      история просмотров, поиск видео;
- *    - воспроизведение через встроенный YouTube-плеер Lampa
- *      (Lampa.Player.play + плейлист);
- *    - авторизация по протоколу OAuth 2.0 (device flow) — требуется
- *      собственный OAuth Client ID, инструкция внутри настроек плагина.
+ *  Воспроизведение в максимальном качестве: сервер cobalt
+ *    - отдаёт один готовый mp4 в исходном качестве (вплоть до 2160p);
+ *    - публичный api.cobalt.tools больше не отдаёт YouTube, поэтому
+ *      нужен свой инстанс (одна команда Docker, инструкция в настройках);
+ *    - если cobalt не настроен/недоступен — откат на поток Piped
+ *      (макс. 720p) или на встроенный YouTube-плеер Lampa.
  *
  *  Настройки: Настройки -> YouTube
  *  Пункт главного меню: YouTube
@@ -23,34 +27,48 @@
 
     var COMPONENT = 'youtube';
 
-    var OAUTH_DEVICE = 'https://oauth2.googleapis.com/device/code';
-    var OAUTH_TOKEN  = 'https://oauth2.googleapis.com/token';
-    var API_BASE     = 'https://www.googleapis.com/youtube/v3';
-    var SCOPE        = 'https://www.googleapis.com/auth/youtube';
-    var GRANT_DEVICE = 'urn:ietf:params:oauth:grant-type:device_code';
+    var DEFAULT_PIPED = 'https://api.piped.private.coffee';
+    var YT_WATCH = 'https://www.youtube.com/watch?v=';
+
+    var QUALITIES = [
+        { title: '2160p (4K)', q: '2160' },
+        { title: '1440p (2K)', q: '1440' },
+        { title: '1080p (FullHD)', q: '1080' },
+        { title: '720p (HD)', q: '720' },
+        { title: '480p', q: '480' },
+        { title: '360p', q: '360' }
+    ];
+
+    var REGIONS = {
+        'RU': 'Россия', 'US': 'США', 'UA': 'Украина', 'BY': 'Беларусь',
+        'GB': 'Великобритания', 'DE': 'Германия', 'FR': 'Франция',
+        'JP': 'Япония', 'KR': 'Корея', 'IN': 'Индия', 'BR': 'Бразилия'
+    };
 
     var Network = Lampa.Reguest;
 
     // --------------------------------------------------------------------------
-    //  Хранилище
+    //  Настройки
     // --------------------------------------------------------------------------
 
-    function clientId() {
-        return (Lampa.Storage.get('yt_client_id', '') + '').trim();
+    function pipedUrl() {
+        return (Lampa.Storage.get('yt_piped_url', DEFAULT_PIPED) + '').trim().replace(/\/+$/, '');
     }
 
-    function getTokens() {
-        var t = Lampa.Storage.get('yt_tokens', null);
-        return t && typeof t === 'object' ? t : null;
+    function cobaltUrl() {
+        return (Lampa.Storage.get('yt_cobalt_url', '') + '').trim().replace(/\/+$/, '');
     }
 
-    function setTokens(t) {
-        Lampa.Storage.set('yt_tokens', t);
+    function cobaltKey() {
+        return (Lampa.Storage.get('yt_cobalt_key', '') + '').trim();
     }
 
-    function loggedIn() {
-        var t = getTokens();
-        return !!(t && t.access_token);
+    function defaultQuality() {
+        return Lampa.Storage.get('yt_quality', '2160') + '';
+    }
+
+    function region() {
+        return Lampa.Storage.get('yt_region', 'RU') + '';
     }
 
     // --------------------------------------------------------------------------
@@ -65,381 +83,160 @@
             .replace(/"/g, '&quot;');
     }
 
-    // ISO 8601 длительность (PT1H2M3S) -> человекочитаемый вид
-    function parseDuration(iso) {
-        if (!iso) return '';
-        var m = String(iso).toUpperCase().match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
-        if (!m) return '';
-        var h = parseInt(m[1] || 0, 10);
-        var mi = parseInt(m[2] || 0, 10);
-        var s = parseInt(m[3] || 0, 10);
-        if (h > 0) return h + ':' + ('0' + mi).slice(-2) + ':' + ('0' + s).slice(-2);
-        return mi + ':' + ('0' + s).slice(-2);
-    }
-
-    function thumb(snippet, prefer) {
-        var t = (snippet && snippet.thumbnails) || {};
-        var keys = prefer || ['maxres', 'standard', 'high', 'medium', 'default'];
-        for (var i = 0; i < keys.length; i++) {
-            if (t[keys[i]] && t[keys[i]].url) return t[keys[i]].url;
-        }
-        return '';
-    }
-
     function notify(msg) {
-        try {
-            Lampa.Noty.show(msg);
-        } catch (e) {}
+        try { Lampa.Noty.show(msg); } catch (e) {}
+    }
+
+    function videoId(item) {
+        var m = String(item && item.url || '').match(/[?&]v=([^&]+)/);
+        return m ? m[1] : '';
+    }
+
+    function channelId(item) {
+        var m = String(item && item.url || '').match(/\/(?:channel|c|user)\/([^/?&]+)/);
+        return m ? m[1] : '';
+    }
+
+    function fmtNum(n) {
+        n = parseInt(n, 10);
+        if (isNaN(n) || n < 0) return '';
+        if (n >= 1000000) return (n / 1000000).toFixed(1).replace(/\.0$/, '') + ' млн';
+        if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, '') + ' тыс';
+        return '' + n;
+    }
+
+    function fmtDur(sec) {
+        sec = parseInt(sec, 10);
+        if (isNaN(sec) || sec <= 0) return '';
+        var h = Math.floor(sec / 3600);
+        var m = Math.floor((sec % 3600) / 60);
+        var s = sec % 60;
+        if (h > 0) return h + ':' + ('0' + m).slice(-2) + ':' + ('0' + s).slice(-2);
+        return m + ':' + ('0' + s).slice(-2);
+    }
+
+    function fmtDate(d) {
+        if (!d) return '';
+        return String(d).slice(0, 10);
     }
 
     // --------------------------------------------------------------------------
-    //  Авторизация (OAuth 2.0 device flow)
+    //  Сеть
     // --------------------------------------------------------------------------
 
-    var auth = {
-        network: null,
-        polling: false,
-        cancelled: false
-    };
-
-    function authNetwork() {
-        if (!auth.network) auth.network = new Network();
-        return auth.network;
-    }
-
-    function saveTokens(tok) {
-        if (!tok || !tok.access_token) return;
-        var old = getTokens() || {};
-        setTokens({
-            access_token: tok.access_token,
-            refresh_token: tok.refresh_token || old.refresh_token || '',
-            expires_at: tok.expires_in ? Date.now() + (tok.expires_in - 60) * 1000 : 0
-        });
-    }
-
-    // Получить валидный access token (с обновлением по refresh_token)
-    function getToken(call) {
-        var t = getTokens();
-
-        if (!t || !t.access_token) return call(null);
-
-        if (t.expires_at && Date.now() < t.expires_at) return call(t.access_token);
-
-        if (!t.refresh_token) return call(null);
-
-        refreshTokens(function(ok) {
-            var nt = getTokens();
-            call(ok && nt ? nt.access_token : null);
-        });
-    }
-
-    function refreshTokens(call) {
-        var t = getTokens();
-        if (!t || !t.refresh_token) return call(false);
-
-        var net = authNetwork();
-
-        net.silent(OAUTH_TOKEN, function (tok) {
-            if (tok && tok.access_token) {
-                saveTokens(tok);
-                call(true);
-            } else call(false);
-        }, function () {
-            call(false);
-        }, {
-            client_id: clientId(),
-            grant_type: 'refresh_token',
-            refresh_token: t.refresh_token
-        });
-    }
-
-    // Запуск авторизации: запрос device code + показ кода пользователю
-    function startLogin() {
-        var cid = clientId();
-
-        if (!cid) {
-            notify('Сначала укажите OAuth Client ID в настройках');
-            return;
-        }
-
-        var net = authNetwork();
-
-        net.silent(OAUTH_DEVICE, function (res) {
-            if (!res || !res.device_code) {
-                notify('Не удалось начать авторизацию');
-                return;
-            }
-            showAuthModal(res);
-        }, function () {
-            notify('Ошибка запроса авторизации');
-        }, {
-            client_id: cid,
-            scope: SCOPE
-        });
-    }
-
-    function logout() {
-        setTokens(null);
-        Lampa.Storage.set('yt_account', null);
-        updateStatus();
-        notify('Вы вышли из аккаунта');
-    }
-
-    // Модальное окно с кодом авторизации + опрос токена
-    function showAuthModal(res) {
-        var modal_html = $(
-            '<div class="about">' +
-            '<div style="font-size:1.2em;margin-bottom:0.6em">Откройте на устройстве с браузером:</div>' +
-            '<div style="font-size:1.4em;font-weight:700;margin-bottom:0.3em">' + esc(res.verification_url || 'google.com/device') + '</div>' +
-            '<div style="margin-bottom:0.3em">и введите код:</div>' +
-            '<div class="extensions__item-code" style="font-size:1.8em;letter-spacing:0.1em;font-weight:700">' + esc(res.user_code || '') + '</div>' +
-            '<div style="margin-top:0.8em;opacity:0.7">Ожидание подтверждения...</div>' +
-            '</div>'
-        );
-
-        try {
-            Lampa.Modal.open({
-                title: 'Авторизация YouTube',
-                html: modal_html,
-                size: 'medium'
-            });
-        } catch (e) {
-            notify('Код авторизации: ' + (res.user_code || '') + ' на ' + (res.verification_url || 'google.com/device'));
-        }
-
-        auth.cancelled = false;
-        pollToken(res, 1);
-    }
-
-    function pollToken(res, attempt) {
-        if (auth.cancelled) return;
-
-        var cid = clientId();
-        var net = authNetwork();
-
-        net.silent(OAUTH_TOKEN, function (tok) {
-            if (auth.cancelled) return;
-            if (tok && tok.access_token) {
-                saveTokens(tok);
-                try { Lampa.Modal.close(); } catch (e) {}
-                notify('Вы успешно вошли в аккаунт YouTube');
-                loadAccount(updateStatus);
-            }
-        }, function (e) {
-            if (auth.cancelled) return;
-
-            var code = '';
-            try { code = (e && e.responseJSON && e.responseJSON.error) || (e && e.responseText) || ''; } catch (err) {}
-
-            if (code == 'authorization_pending') {
-                setTimeout(function () { pollToken(res, attempt + 1); }, (res.interval || 5) * 1000);
-            } else if (code == 'slow_down') {
-                setTimeout(function () { pollToken(res, attempt + 1); }, ((res.interval || 5) + 5) * 1000);
-            } else if (code == 'expired_token') {
-                notify('Срок действия кода истёк. Попробуйте снова');
-                try { Lampa.Modal.close(); } catch (err) {}
-            } else {
-                notify('Ошибка авторизации' + (code ? ': ' + code : ''));
-                try { Lampa.Modal.close(); } catch (err) {}
-            }
-        }, {
-            client_id: cid,
-            grant_type: GRANT_DEVICE,
-            device_code: res.device_code
-        });
-    }
-
-    // Загрузка информации о канале аккаунта
-    function loadAccount(call) {
-        if (!loggedIn()) {
-            if (call) call(null);
-            return;
-        }
-        apiGet('/channels', { part: 'snippet', mine: 'true' }, function (json) {
-            var acc = null;
-            try {
-                var it = json.items && json.items[0];
-                if (it) acc = { title: it.snippet.title, img: thumb(it.snippet) };
-            } catch (e) {}
-            Lampa.Storage.set('yt_account', acc);
-            if (call) call(acc);
-        }, function () {
-            if (call) call(null);
-        });
-    }
-
-    // --------------------------------------------------------------------------
-    //  YouTube Data API v3
-    // --------------------------------------------------------------------------
-
-    // GET-запрос к API с авторизацией (и одним ретраем при 401)
     function apiGet(path, params, call, err) {
-        getToken(function (token) {
-            if (!token) {
-                err({ notoken: true });
-                return;
+        var url = pipedUrl() + path;
+        if (params) {
+            var q = [];
+            for (var k in params) {
+                if (Object.prototype.hasOwnProperty.call(params, k)) {
+                    q.push(encodeURIComponent(k) + '=' + encodeURIComponent(params[k]));
+                }
             }
+            if (q.length) url += (url.indexOf('?') >= 0 ? '&' : '?') + q.join('&');
+        }
 
-            var url = API_BASE + path + (path.indexOf('?') >= 0 ? '&' : '?') + buildQuery(params);
-            var net = authNetwork();
+        var net = new Network();
+        net.timeout(20000);
+        net.silent(url, call, err, false, { dataType: 'json' });
+    }
 
-            net.silent(url, call, function (e) {
-                var status = 0;
-                try { status = e.status || 0; } catch (ex) {}
+    // --------------------------------------------------------------------------
+    //  Воспроизведение: cobalt -> Piped -> нативный плеер
+    // --------------------------------------------------------------------------
 
-                if (status == 401) {
-                    refreshTokens(function (ok) {
-                        if (!ok) return err(e);
-                        getToken(function (t2) {
-                            if (!t2) return err(e);
-                            net.silent(url, call, err, false, {
-                                headers: { Authorization: 'Bearer ' + t2 }
-                            });
-                        });
-                    });
-                } else err(e);
-            }, false, {
-                headers: { Authorization: 'Bearer ' + token }
-            });
+    function playStream(video, quality, call) {
+        var url = cobaltUrl();
+        var id = video.id || videoId(video);
+
+        if (!url) return fallbackPlay(video, call);
+
+        var body = {
+            url: YT_WATCH + id,
+            videoQuality: quality || defaultQuality(),
+            youtubeVideoCodec: 'h264',
+            youtubeVideoContainer: 'mp4',
+            filenameStyle: 'basic'
+        };
+
+        var headers = { Accept: 'application/json' };
+        if (cobaltKey()) headers.Authorization = 'Api-Key ' + cobaltKey();
+
+        var net = new Network();
+        net.timeout(60000);
+        net.silent(url, function (res) {
+            if (res && (res.status == 'tunnel' || res.status == 'redirect') && res.url) {
+                Lampa.Player.play({
+                    url: res.url,
+                    title: video.title,
+                    quality: (quality || defaultQuality()) + 'p'
+                });
+                if (call) call(true);
+            } else if (call) call(false);
+        }, function () {
+            if (call) call(false);
+        }, JSON.stringify(body), {
+            headers: headers,
+            contentType: 'application/json',
+            processData: false,
+            dataType: 'json',
+            timeout: 60000
         });
     }
 
-    function buildQuery(params) {
-        var q = [];
-        for (var k in params) {
-            if (!Object.prototype.hasOwnProperty.call(params, k)) continue;
-            q.push(encodeURIComponent(k) + '=' + encodeURIComponent(params[k]));
-        }
-        return q.join('&');
-    }
+    // Откат: лучший muxed-поток Piped (макс. 720p), далее — нативный плеер
+    function fallbackPlay(video, call) {
+        var id = video.id || videoId(video);
+        if (!id) { notify('Не удалось определить видео'); return; }
 
-    // Пакетное получение длительностей видео
-    function fetchDurations(ids, call) {
-        if (!ids || !ids.length) return call({});
-
-        apiGet('/videos', { part: 'contentDetails', id: ids.join(',') }, function (json) {
-            var map = {};
+        apiGet('/streams/' + id, {}, function (json) {
+            var best = null;
             try {
-                (json.items || []).forEach(function (it) {
-                    map[it.id] = parseDuration(it.contentDetails && it.contentDetails.duration);
+                (json.videoStreams || []).forEach(function (s) {
+                    if (s.videoOnly) return;
+                    var h = parseInt(s.quality, 10) || 0;
+                    if (!best || h > best._h) { best = s; s._h = h; }
                 });
             } catch (e) {}
-            call(map);
-        }, function () { call({}); });
-    }
 
-    // --------------------------------------------------------------------------
-    //  Настройки
-    // --------------------------------------------------------------------------
-
-    var statusEl = null;
-
-    function updateStatus() {
-        if (!statusEl || !statusEl.length) return;
-        try {
-            var acc = Lampa.Storage.get('yt_account', null);
-            if (acc && acc.title) {
-                statusEl.text('Вы вошли как: ' + acc.title);
-            } else if (loggedIn()) {
-                statusEl.text('Выполнен вход');
+            if (best && best.url) {
+                Lampa.Player.play({ url: best.url, title: json.title || video.title });
+                if (call) call(true);
             } else {
-                statusEl.text('Вход не выполнен');
+                Lampa.Player.play({ url: YT_WATCH + id, title: video.title, youtube: true });
+                if (call) call(true);
             }
-        } catch (e) {}
+        }, function () {
+            Lampa.Player.play({ url: YT_WATCH + id, title: video.title, youtube: true });
+            if (call) call(true);
+        });
     }
 
-    function showInstructions() {
-        var html = $(
-            '<div class="about" style="line-height:1.6">' +
-            '<div>1. Откройте <b>console.cloud.google.com</b> и войдите в Google-аккаунт</div>' +
-            '<div>2. Создайте проект (или выберите существующий)</div>' +
-            '<div>3. <b>APIs &amp; Services</b> &rarr; <b>Library</b> &rarr; включите <b>YouTube Data API v3</b></div>' +
-            '<div>4. <b>APIs &amp; Services</b> &rarr; <b>OAuth consent screen</b> &rarr; тип <b>External</b>, заполните название и email</div>' +
-            '<div>5. <b>Credentials</b> &rarr; <b>Create credentials</b> &rarr; <b>OAuth client ID</b></div>' +
-            '<div>6. Тип приложения: <b>TVs and Limited Input devices</b></div>' +
-            '<div>7. Скопируйте <b>Client ID</b> и вставьте его в настройках плагина</div>' +
-            '<div style="margin-top:0.6em;opacity:0.7">API используется только для списков видео. Токен хранится только на этом устройстве.</div>' +
-            '</div>'
-        );
+    function playVideo(video, quality) {
+        notify('Загрузка видео' + (quality ? ' (' + quality + 'p)' : '') + '…');
 
-        try {
-            Lampa.Modal.open({
-                title: 'Как получить OAuth Client ID',
-                html: html,
-                size: 'medium'
-            });
-        } catch (e) {
-            notify('Подробнее: console.cloud.google.com -> Credentials -> OAuth client ID (TVs and Limited Input devices)');
-        }
+        playStream(video, quality, function (ok) {
+            if (!ok) {
+                notify('cobalt не ответил — используется поток Piped');
+                fallbackPlay(video);
+            }
+        });
     }
 
-    function addSettings() {
-        Lampa.SettingsApi.addComponent({
-            component: COMPONENT,
-            icon: "<svg height=\"36\" viewBox=\"0 0 36 36\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\">\n                <rect x=\"1\" y=\"6\" width=\"34\" height=\"24\" rx=\"5\" fill=\"#FF0000\"/>\n                <path d=\"M15 13.5v9l7.5-4.5-7.5-4.5z\" fill=\"#fff\"/>\n            </svg>",
-            name: 'YouTube'
-        });
+    function showQualityMenu(video) {
+        var enabled = Lampa.Controller.enabled().name;
 
-        Lampa.SettingsApi.addParam({
-            component: COMPONENT,
-            param: { type: 'title' },
-            field: { name: 'Авторизация' }
-        });
-
-        Lampa.SettingsApi.addParam({
-            component: COMPONENT,
-            param: { type: 'button' },
-            field: {
-                name: 'Как получить Client ID',
-                description: 'Пошаговая инструкция по созданию OAuth-приложения в Google Cloud'
+        Lampa.Select.show({
+            title: 'Качество воспроизведения',
+            items: QUALITIES.map(function (q) {
+                return { title: q.title, q: q.q };
+            }),
+            onBack: function () {
+                Lampa.Controller.toggle(enabled);
             },
-            onChange: function () {
-                showInstructions();
-            }
-        });
-
-        Lampa.SettingsApi.addParam({
-            component: COMPONENT,
-            param: {
-                name: 'yt_client_id',
-                type: 'input',
-                default: ''
-            },
-            field: {
-                name: 'OAuth Client ID',
-                description: 'Client ID из Google Cloud Console'
-            }
-        });
-
-        Lampa.SettingsApi.addParam({
-            component: COMPONENT,
-            param: { type: 'button' },
-            field: { name: 'Статус аккаунта' },
-            onRender: function (item) {
-                statusEl = $('<div class="settings-param__descr"></div>');
-                item.append(statusEl);
-                updateStatus();
-            },
-            onChange: function () {
-                loadAccount(updateStatus);
-            }
-        });
-
-        Lampa.SettingsApi.addParam({
-            component: COMPONENT,
-            param: { type: 'button' },
-            field: { name: 'Войти в аккаунт YouTube' },
-            onChange: function () {
-                startLogin();
-            }
-        });
-
-        Lampa.SettingsApi.addParam({
-            component: COMPONENT,
-            param: { type: 'button' },
-            field: { name: 'Выйти из аккаунта' },
-            onChange: function () {
-                logout();
+            onSelect: function (a) {
+                Lampa.Controller.toggle(enabled);
+                playVideo(video, a.q);
             }
         });
     }
@@ -449,35 +246,72 @@
     // --------------------------------------------------------------------------
 
     function addTemplates() {
-        Lampa.Template.add('yt_css', "\n        <style>\n        .yt-card{position:relative;display:flex;background-color:rgba(0,0,0,0.3);border-radius:0.3em;overflow:hidden}\n        .yt-card__img{position:relative;width:16em;min-width:16em;flex-shrink:0}\n        .yt-card__img>img{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity .3s}\n        .yt-card__img--loaded>img{opacity:1}\n        .yt-card__duration{position:absolute;right:0.5em;bottom:0.5em;background:rgba(0,0,0,0.8);border-radius:0.2em;padding:0.1em 0.4em;font-size:0.8em}\n        .yt-card__body{padding:1em 1.2em;line-height:1.35;flex-grow:1}\n        .yt-card__title{font-size:1.1em;font-weight:700;margin-bottom:0.3em}\n        .yt-card__info{opacity:0.7;font-size:0.9em}\n        .yt-folder{display:flex;align-items:center;background-color:rgba(0,0,0,0.3);border-radius:0.3em;padding:1em 1.2em}\n        .yt-folder__ico{width:2.4em;height:2.4em;margin-right:1em;flex-shrink:0}\n        .yt-folder__ico>svg{width:100%;height:100%}\n        .yt-folder__title{font-size:1.1em;font-weight:700}\n        .yt-empty{padding:3em 2em;text-align:center;opacity:0.8}\n        .yt-empty__title{font-size:1.2em;font-weight:700;margin-bottom:0.4em}\n        .yt-empty__text{opacity:0.7}\n        .yt-loading{padding:3em 0;display:flex;justify-content:center}\n        .yt-loading>div.broadcast__scan{width:2.4em;height:2.4em}\n        @media screen and (max-width:480px){\n            .yt-card__img{width:10em;min-width:10em}\n            .yt-card__body{padding:0.8em 1em}\n        }\n        </style>");
+        Lampa.Template.add('yt_css', "\n        <style>\n        .yt-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(16em,1fr));gap:0.9em}\n        @media screen and (min-width:1000px){.yt-grid{grid-template-columns:repeat(auto-fill,minmax(18em,1fr))}}\n        @media screen and (max-width:480px){.yt-grid{grid-template-columns:repeat(auto-fill,minmax(12em,1fr));gap:0.6em}}\n        .yt-card{background:rgba(0,0,0,0.3);border-radius:0.4em;overflow:hidden;display:flex;flex-direction:column}\n        .yt-card__thumb{position:relative;padding-top:56.25%;background:#111}\n        .yt-card__thumb>img{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity .3s}\n        .yt-card__thumb--loaded>img{opacity:1}\n        .yt-card__dur{position:absolute;right:0.4em;bottom:0.4em;background:rgba(0,0,0,0.85);border-radius:0.2em;padding:0.05em 0.35em;font-size:0.78em}\n        .yt-card__body{padding:0.7em 0.8em}\n        .yt-card__title{font-weight:700;line-height:1.3;margin-bottom:0.25em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}\n        .yt-card__meta{opacity:0.65;font-size:0.85em;line-height:1.3;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden}\n        .yt-head{display:flex;align-items:center;gap:0.8em;margin-bottom:1em}\n        .yt-head__logo{display:flex;align-items:center;gap:0.45em;font-size:1.4em;font-weight:800}\n        .yt-head__logo svg{width:1.5em;height:1.5em}\n        .yt-searchbtn{margin-left:auto;background:rgba(255,255,255,0.08);border-radius:0.4em;padding:0.55em 1.1em;font-weight:600;display:flex;align-items:center;gap:0.5em}\n        .yt-searchbtn svg{width:1.1em;height:1.1em;opacity:0.8}\n        .yt-secthead{font-size:1.15em;font-weight:700;margin:1.1em 0 0.7em;opacity:0.9}\n        .yt-secthead:first-child{margin-top:0}\n        .yt-hero{position:relative;padding-top:42%;border-radius:0.5em;overflow:hidden;background:#000}\n        @media screen and (max-width:900px){.yt-hero{padding-top:56.25%}}\n        .yt-hero>img{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity .3s}\n        .yt-hero--loaded>img{opacity:1}\n        .yt-hero__play{position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.25)}\n        .yt-hero__play svg{width:3.4em;height:3.4em;filter:drop-shadow(0 0 0.4em rgba(0,0,0,0.6))}\n        .yt-hero__dur{position:absolute;right:0.6em;bottom:0.6em;background:rgba(0,0,0,0.85);border-radius:0.25em;padding:0.1em 0.5em;font-size:0.9em}\n        .yt-vtitle{font-size:1.35em;font-weight:700;line-height:1.3;margin:0.8em 0 0.3em}\n        .yt-vmeta{opacity:0.7;margin-bottom:0.9em}\n        .yt-channel{display:flex;align-items:center;gap:0.8em;margin-bottom:1em}\n        .yt-channel__avatar{width:3em;height:3em;border-radius:100%;flex-shrink:0;object-fit:cover;background:#222}\n        .yt-channel__name{font-weight:700;font-size:1.05em}\n        .yt-channel__subs{opacity:0.65;font-size:0.85em}\n        .yt-desc{opacity:0.85;line-height:1.5;margin-bottom:1em;max-height:11em;overflow-y:auto;background:rgba(0,0,0,0.25);border-radius:0.4em;padding:0.8em 1em;font-size:0.92em}\n        .yt-desc a{color:#8ab4f8}\n        .yt-banner{position:relative;padding-top:22%;border-radius:0.5em;overflow:hidden;background:#1a1a1a;margin-bottom:1em}\n        .yt-banner>img{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity .3s}\n        .yt-banner--loaded>img{opacity:1}\n        .yt-comment{display:flex;gap:0.7em;padding:0.7em 0;border-bottom:1px solid rgba(255,255,255,0.06)}\n        .yt-comment__avatar{width:2.2em;height:2.2em;border-radius:100%;flex-shrink:0;background:#333;object-fit:cover}\n        .yt-comment__name{font-weight:600;font-size:0.9em;opacity:0.9}\n        .yt-comment__time{opacity:0.55;font-size:0.8em;margin-left:0.5em}\n        .yt-comment__text{opacity:0.85;font-size:0.9em;line-height:1.35;margin-top:0.15em;word-wrap:break-word}\n        .yt-more{display:flex;justify-content:center;padding:1em}\n        .yt-more__btn{background:rgba(255,255,255,0.08);border-radius:0.4em;padding:0.6em 1.6em;font-weight:600}\n        .yt-empty{padding:3em 1.5em;text-align:center;opacity:0.8}\n        .yt-empty__title{font-size:1.2em;font-weight:700;margin-bottom:0.4em}\n        .yt-empty__text{opacity:0.7}\n        .yt-tabs{display:flex;gap:0.5em;margin-bottom:1em;flex-wrap:wrap}\n        .yt-tab{background:rgba(255,255,255,0.08);border-radius:2em;padding:0.4em 1.1em;font-weight:600;font-size:0.92em}\n        .yt-tab--active{background:#fff;color:#000}\n        .yt-loading{padding:3em 0;display:flex;justify-content:center}\n        </style>");
 
-        Lampa.Template.add('yt_video', "<div class=\"yt-card selector\">\n            <div class=\"yt-card__img\">\n                <img alt=\"\">\n                <div class=\"yt-card__duration\">{duration}</div>\n            </div>\n            <div class=\"yt-card__body\">\n                <div class=\"yt-card__title\">{title}</div>\n                <div class=\"yt-card__info\">{info}</div>\n            </div>\n        </div>");
+        Lampa.Template.add('yt_card', "<div class=\"yt-card selector\">\n            <div class=\"yt-card__thumb\">\n                <img alt=\"\">\n                <span class=\"yt-card__dur\">{duration}</span>\n            </div>\n            <div class=\"yt-card__body\">\n                <div class=\"yt-card__title\">{title}</div>\n                <div class=\"yt-card__meta\">{meta}</div>\n            </div>\n        </div>");
 
-        Lampa.Template.add('yt_folder', "<div class=\"yt-folder selector\">\n            <div class=\"yt-folder__ico\">{ico}</div>\n            <div class=\"yt-folder__title\">{title}</div>\n        </div>");
+        Lampa.Template.add('yt_channelcard', "<div class=\"yt-card selector\">\n            <div class=\"yt-card__thumb\" style=\"padding-top:0\">\n                <img alt=\"\" style=\"position:static;width:100%;height:100%;object-fit:cover\">\n            </div>\n            <div class=\"yt-card__body\">\n                <div class=\"yt-card__title\">{title}</div>\n                <div class=\"yt-card__meta\">{meta}</div>\n            </div>\n        </div>");
+
+        Lampa.Template.add('yt_head', "<div class=\"yt-head\">\n            <div class=\"yt-head__logo\"><svg viewBox=\"0 0 36 36\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><rect x=\"1\" y=\"6\" width=\"34\" height=\"24\" rx=\"5\" fill=\"#FF0000\"/><path d=\"M15 13.5v9l7.5-4.5-7.5-4.5z\" fill=\"#fff\"/></svg>YouTube</div>\n            <div class=\"yt-searchbtn selector\"><svg viewBox=\"0 0 24 24\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><circle cx=\"11\" cy=\"11\" r=\"7\" stroke=\"currentColor\" stroke-width=\"2\"/><path d=\"M16.5 16.5L21 21\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"/></svg>Поиск</div>\n        </div>");
+
+        Lampa.Template.add('yt_secthead', "<div class=\"yt-secthead\">{title}</div>");
+
+        Lampa.Template.add('yt_hero', "<div class=\"yt-hero selector\">\n            <img alt=\"\">\n            <div class=\"yt-hero__play\"><svg viewBox=\"0 0 60 60\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><circle cx=\"30\" cy=\"30\" r=\"29\" fill=\"rgba(0,0,0,0.55)\" stroke=\"#fff\" stroke-width=\"2\"/><path d=\"M24 20v20l16-10-16-10z\" fill=\"#fff\"/></svg></div>\n            <span class=\"yt-hero__dur\">{duration}</span>\n        </div>");
 
         Lampa.Template.add('yt_empty', "<div class=\"yt-empty selector\">\n            <div class=\"yt-empty__title\">{title}</div>\n            <div class=\"yt-empty__text\">{text}</div>\n        </div>");
+
+        Lampa.Template.add('yt_more', "<div class=\"yt-more\"><div class=\"yt-more__btn selector\">Загрузить ещё</div></div>");
 
         Lampa.Template.add('yt_loading', "<div class=\"yt-loading\"><div class=\"broadcast__scan\"><div></div></div></div>");
     }
 
-    var ICON_PLAY = "<svg viewBox=\"0 0 36 36\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><rect x=\"1\" y=\"6\" width=\"34\" height=\"24\" rx=\"5\" fill=\"#FF0000\"/><path d=\"M15 13.5v9l7.5-4.5-7.5-4.5z\" fill=\"#fff\"/></svg>";
-    var ICON_HEART = "<svg viewBox=\"0 0 24 24\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M12 21s-8-4.9-8-10.5A4.5 4.5 0 0 1 12 7a4.5 4.5 0 0 1 8 3.5C20 16.1 12 21 12 21z\" fill=\"#FF0000\"/></svg>";
-    var ICON_CLOCK = "<svg viewBox=\"0 0 24 24\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><circle cx=\"12\" cy=\"12\" r=\"9\" stroke=\"#fff\" stroke-width=\"2\"/><path d=\"M12 7v5l3.5 2\" stroke=\"#fff\" stroke-width=\"2\" stroke-linecap=\"round\"/></svg>";
-    var ICON_HISTORY = "<svg viewBox=\"0 0 24 24\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M3 12a9 9 0 1 0 3-6.7\" stroke=\"#fff\" stroke-width=\"2\" stroke-linecap=\"round\"/><path d=\"M3 4v5h5\" stroke=\"#fff\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/><path d=\"M12 8v4l3 2\" stroke=\"#fff\" stroke-width=\"2\" stroke-linecap=\"round\"/></svg>";
-    var ICON_SEARCH = "<svg viewBox=\"0 0 24 24\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><circle cx=\"11\" cy=\"11\" r=\"7\" stroke=\"#fff\" stroke-width=\"2\"/><path d=\"M16.5 16.5L21 21\" stroke=\"#fff\" stroke-width=\"2\" stroke-linecap=\"round\"/></svg>";
-    var ICON_USERS = "<svg viewBox=\"0 0 24 24\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><circle cx=\"9\" cy=\"8\" r=\"3.5\" stroke=\"#fff\" stroke-width=\"2\"/><path d=\"M2.5 19c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6\" stroke=\"#fff\" stroke-width=\"2\" stroke-linecap=\"round\"/><path d=\"M16 5.2a3.5 3.5 0 0 1 0 5.6M17.5 13.4c2.1.6 3.5 2.4 3.5 5.1\" stroke=\"#fff\" stroke-width=\"2\" stroke-linecap=\"round\"/></svg>";
+    var ICON_SEARCH = "<svg viewBox=\"0 0 24 24\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><circle cx=\"11\" cy=\"11\" r=\"7\" stroke=\"currentColor\" stroke-width=\"2\"/><path d=\"M16.5 16.5L21 21\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"/></svg>";
 
     // --------------------------------------------------------------------------
-    //  Компонент-обзор YouTube
+    //  Нормализация элементов
     // --------------------------------------------------------------------------
 
-    var CATEGORIES = [
-        { id: 'subs',    title: 'Подписки',       ico: ICON_USERS },
-        { id: 'likes',   title: 'Понравившиеся',  ico: ICON_HEART },
-        { id: 'later',   title: 'Смотреть позже', ico: ICON_CLOCK },
-        { id: 'history', title: 'История',        ico: ICON_HISTORY },
-        { id: 'search',  title: 'Поиск',          ico: ICON_SEARCH }
-    ];
+    function normStream(it) {
+        return {
+            id: videoId(it),
+            type: 'stream',
+            title: it.title || '',
+            url: it.url || '',
+            thumb: it.thumbnail || it.thumbnailUrl || '',
+            uploader: it.uploaderName || it.uploader || '',
+            uploaderUrl: it.uploaderUrl || '',
+            uploaderAvatar: it.uploaderAvatar || '',
+            duration: it.duration >= 0 ? it.duration : -1,
+            views: it.views >= 0 ? it.views : -1,
+            uploadedDate: it.uploadedDate || '',
+            isShort: !!it.isShort
+        };
+    }
+
+    function normChannel(it) {
+        return {
+            id: channelId(it),
+            type: 'channel',
+            title: it.name || '',
+            url: it.url || '',
+            thumb: it.thumbnail || '',
+            description: it.description || '',
+            subscribers: it.subscribers >= 0 ? it.subscribers : -1,
+            verified: !!it.verified
+        };
+    }
+
+    function metaOf(v) {
+        var parts = [];
+        if (v.uploader) parts.push(v.uploader);
+        if (v.views >= 0) parts.push(fmtNum(v.views) + ' просмотров');
+        if (v.uploadedDate) parts.push(v.uploadedDate);
+        return esc(parts.join(' • '));
+    }
+
+    // --------------------------------------------------------------------------
+    //  Компонент
+    // --------------------------------------------------------------------------
 
     function component(object) {
         var network = new Network();
@@ -485,29 +319,20 @@
         var stack = [];
         var last = false;
         var initialized = false;
-        var current_videos = [];
 
         var _this = this;
 
-        this.create = function () {
-            return this.render();
-        };
-
-        this.render = function () {
-            return scroll.render();
-        };
+        this.create = function () { return this.render(); };
+        this.render = function () { return scroll.render(); };
 
         this.loading = function (status) {
             try {
                 if (status) this.activity.loader(true);
-                else {
-                    this.activity.loader(false);
-                    this.activity.toggle();
-                }
+                else { this.activity.loader(false); this.activity.toggle(); }
             } catch (e) {}
         };
 
-        // --- отрисовка ------------------------------------------------------
+        // --- базовая отрисовка ----------------------------------------------
 
         function clear() {
             last = false;
@@ -515,97 +340,59 @@
             scroll.clear();
         }
 
-        function bindCard(html, onClick) {
-            html.on('hover:enter', onClick).on('hover:focus', function (e) {
+        function bind(html, onClick, onLong) {
+            html.on('hover:enter', onClick);
+            if (onLong) html.on('hover:long', onLong);
+            html.on('hover:focus', function (e) {
                 last = e.target;
                 scroll.update($(e.target), true);
             });
             scroll.append(html);
         }
 
-        function drawMain() {
-            clear();
-            CATEGORIES.forEach(function (cat) {
-                var html = Lampa.Template.get('yt_folder', {
-                    ico: cat.ico,
-                    title: cat.title
-                });
-                bindCard(html, function () {
-                    openCategory(cat);
-                });
-            });
-            _this.loading(false);
+        function loadImage(html, url, loadedClass) {
+            if (!url) return;
+            try {
+                var img = html.find('img')[0];
+                if (!img) return;
+                img.onerror = function () { img.src = './img/img_broken.svg'; html.find(loadedClass).addClass('yt-card__thumb--loaded'); };
+                img.onload = function () { html.find(loadedClass).addClass('yt-card__thumb--loaded'); };
+                img.src = url;
+            } catch (e) {}
         }
 
-        function drawChannels(items, title) {
-            clear();
-            if (!items.length) return drawEmpty(title, 'Список пуст');
-
-            items.forEach(function (ch) {
-                var html = Lampa.Template.get('yt_video', {
-                    duration: '',
-                    title: ch.title,
-                    info: esc(ch.subs || '')
-                });
-                loadImage(html, ch.img, true);
-                bindCard(html, function () {
-                    loadChannelVideos(ch);
-                });
+        function drawVideoCard(v, onLong) {
+            var html = Lampa.Template.get('yt_card', {
+                duration: esc(fmtDur(v.duration)),
+                title: esc(v.title),
+                meta: metaOf(v)
             });
-            _this.loading(false);
+            loadImage(html, v.thumb, '.yt-card__thumb');
+            bind(html, function () { openVideo(v); }, onLong);
+            return html;
         }
 
-        function drawVideos(items, title) {
-            clear();
-            current_videos = items;
-            if (!items.length) return drawEmpty(title, 'Видео не найдены');
-
-            items.forEach(function (v) {
-                var info = [];
-                if (v.channel) info.push(v.channel);
-                if (v.date) info.push(v.date);
-                if (v.duration) info.push(v.duration);
-
-                var html = Lampa.Template.get('yt_video', {
-                    duration: v.duration || '',
-                    title: esc(v.title),
-                    info: esc(info.join(' ● '))
-                });
-                loadImage(html, v.img, false);
-                bindCard(html, function () {
-                    playVideo(v);
-                });
+        function drawChannelCard(c) {
+            var html = Lampa.Template.get('yt_channelcard', {
+                title: esc(c.title),
+                meta: esc((c.subscribers >= 0 ? fmtNum(c.subscribers) + ' подписчиков' : '') + (c.description ? ' • ' + c.description.slice(0, 60) : ''))
             });
-            _this.loading(false);
+            loadImage(html, c.thumb, '.yt-card__thumb');
+            bind(html, function () { openChannel(c.id || c.url); });
+            return html;
+        }
+
+        function drawGrid(items, gridType) {
+            var grid = $('<div class="yt-grid"></div>');
+            items.forEach(function (it) {
+                if (it.type == 'channel' || it.name) grid.append(drawChannelCard(normChannel(it)));
+                else grid.append(drawVideoCard(normStream(it)));
+            });
+            scroll.append(grid);
         }
 
         function drawEmpty(title, text) {
-            clear();
-            var html = Lampa.Template.get('yt_empty', {
-                title: esc(title),
-                text: esc(text)
-            });
-            scroll.append(html);
-            _this.loading(false);
-        }
-
-        function drawAuth() {
-            clear();
-            var html = Lampa.Template.get('yt_empty', {
-                title: 'Вход не выполнен',
-                text: 'Укажите OAuth Client ID и войдите в аккаунт в настройках плагина'
-            });
-            html.on('hover:enter', function () {
-                try {
-                    Lampa.Activity.push({
-                        url: '',
-                        title: 'YouTube',
-                        component: 'settings_' + COMPONENT,
-                        page: 1
-                    });
-                } catch (e) {}
-            });
-            scroll.append(html);
+            scroll.append(Lampa.Template.get('yt_empty', { title: esc(title), text: esc(text) }));
             _this.loading(false);
         }
 
@@ -614,24 +401,273 @@
             scroll.append(Lampa.Template.get('yt_loading', {}));
         }
 
-        function loadImage(html, url, square) {
-            if (!url) return;
+        // --- главная ---------------------------------------------------------
+
+        function drawHome() {
+            clear();
+            scroll.append(Lampa.Template.get('yt_head', {}));
+
+            var head = scroll.render().find('.yt-searchbtn');
+            head.off('hover:enter').on('hover:enter', function () { startSearch(); });
+
+            scroll.append(Lampa.Template.get('yt_secthead', { title: 'В тренде' }));
+
+            apiGet('/trending', { region: region() }, function (json) {
+                if (!json || !json.length) return drawEmpty('Тренды недоступны', 'Попробуйте сменить регион или инстанс Piped в настройках');
+                drawGrid(json);
+                _this.loading(false);
+            }, function () {
+                drawEmpty('Не удалось загрузить', 'Проверьте URL инстанса Piped в настройках');
+            });
+        }
+
+        // --- поиск ------------------------------------------------------------
+
+        function startSearch() {
             try {
-                var img = html.find('img')[0];
-                var box = html.find('.yt-card__img');
-                if (!img) return;
-                img.onerror = function () {
-                    img.src = './img/img_broken.svg';
-                    box.addClass('yt-card__img--loaded');
-                };
-                img.onload = function () {
-                    box.addClass('yt-card__img--loaded');
-                };
-                img.src = url;
+                Lampa.Input.edit({
+                    title: 'Поиск YouTube',
+                    value: '',
+                    free: true,
+                    nosave: true,
+                    nomic: true
+                }, function (value) {
+                    if (value && value.trim()) openSearch(value.trim());
+                });
             } catch (e) {}
         }
 
-        // --- навигация ------------------------------------------------------
+        function drawSearch(view) {
+            clear();
+            scroll.append(Lampa.Template.get('yt_secthead', { title: 'Поиск: ' + view.query }));
+
+            apiGet('/search', { q: view.query, filter: view.filter }, function (json) {
+                if (!json || !json.items || !json.items.length) return drawEmpty('Ничего не найдено', 'Измените запрос');
+                view.nextpage = json.nextpage || null;
+                drawGrid(json.items);
+                appendMore(view);
+                _this.loading(false);
+            }, function () {
+                drawEmpty('Ошибка поиска', 'Попробуйте другой запрос или инстанс');
+            });
+        }
+
+        function loadMoreSearch(view) {
+            if (!view.nextpage) return;
+            apiGet('/nextpage/search', { nextpage: view.nextpage, q: view.query, filter: view.filter }, function (json) {
+                if (!json || !json.items) return;
+                view.nextpage = json.nextpage || null;
+                scroll.render().find('.yt-more').remove();
+                drawGrid(json.items);
+                appendMore(view);
+            }, function () {
+                scroll.render().find('.yt-more').remove();
+            });
+        }
+
+        function appendMore(view) {
+            if (!view.nextpage) return;
+            var btn = Lampa.Template.get('yt_more', {});
+            btn.on('hover:enter', function () {
+                scroll.render().find('.yt-more').remove();
+                if (view.view == 'search') loadMoreSearch(view);
+                else if (view.view == 'channel') loadMoreChannel(view);
+            });
+            scroll.append(btn);
+        }
+
+        // --- страница видео ----------------------------------------------------
+
+        function drawVideo(view) {
+            drawLoading();
+
+            apiGet('/streams/' + view.id, {}, function (json) {
+                if (!json || !json.title) return drawEmpty('Видео недоступно', 'Не удалось получить данные о видео');
+
+                clear();
+
+                var hero = Lampa.Template.get('yt_hero', { duration: esc(fmtDur(json.duration)) });
+                loadImage(hero, json.thumbnailUrl, '.yt-hero');
+                bind(hero, function () { playVideo(normStream({ url: '/watch?v=' + view.id, title: json.title })); }, function () { showQualityMenu(normStream({ url: '/watch?v=' + view.id, title: json.title })); });
+                scroll.append(hero);
+
+                scroll.append($('<div class="yt-vtitle">' + esc(json.title) + '</div>'));
+
+                var meta = [];
+                if (json.views >= 0) meta.push(fmtNum(json.views) + ' просмотров');
+                if (json.uploadDate) meta.push(fmtDate(json.uploadDate));
+                if (json.likes >= 0) meta.push('👍 ' + fmtNum(json.likes));
+                scroll.append($('<div class="yt-vmeta">' + esc(meta.join(' • ')) + '</div>'));
+
+                if (json.uploader) {
+                    var ch = $('<div class="yt-channel selector"><img class="yt-channel__avatar" alt=""><div><div class="yt-channel__name"></div><div class="yt-channel__subs"></div></div></div>');
+                    ch.find('.yt-channel__name').text(json.uploader + (json.uploaderVerified ? ' ✓' : ''));
+                    ch.find('.yt-channel__subs').text(json.uploaderSubscriberCount >= 0 ? fmtNum(json.uploaderSubscriberCount) + ' подписчиков' : '');
+                    var av = ch.find('img')[0];
+                    if (av && json.uploaderAvatar) {
+                        av.onerror = function () { av.style.display = 'none'; };
+                        av.src = json.uploaderAvatar;
+                    }
+                    ch.on('hover:enter', function () {
+                        var m = String(json.uploaderUrl || '').match(/\/channel\/([^/?]+)/);
+                        if (m) openChannel(m[1]);
+                    });
+                    ch.on('hover:focus', function (e) { last = e.target; scroll.update($(e.target), true); });
+                    scroll.append(ch);
+                }
+
+                if (json.description) {
+                    var desc = $('<div class="yt-desc"></div>');
+                    desc.html(json.description);
+                    scroll.append(desc);
+                }
+
+                if (json.relatedStreams && json.relatedStreams.length) {
+                    scroll.append(Lampa.Template.get('yt_secthead', { title: 'Похожие видео' }));
+                    drawGrid(json.relatedStreams);
+                }
+
+                loadComments(view.id);
+
+                _this.loading(false);
+            }, function () {
+                drawEmpty('Видео недоступно', 'Не удалось получить данные о видео');
+            });
+        }
+
+        function loadComments(id) {
+            apiGet('/comments/' + id, {}, function (json) {
+                if (!json || json.disabled || !json.comments || !json.comments.length) return;
+
+                scroll.append(Lampa.Template.get('yt_secthead', { title: json.commentCount >= 0 ? 'Комментарии • ' + fmtNum(json.commentCount) : 'Комментарии' }));
+
+                var box = $('<div></div>');
+                json.comments.slice(0, 12).forEach(function (c) {
+                    var item = $('<div class="yt-comment"><img class="yt-comment__avatar" alt=""><div><span class="yt-comment__name"></span><span class="yt-comment__time"></span><div class="yt-comment__text"></div></div></div>');
+                    item.find('.yt-comment__name').text(c.author);
+                    item.find('.yt-comment__time').text(c.commentedTime);
+                    item.find('.yt-comment__text').text(c.commentText);
+                    if (c.pinned) item.find('.yt-comment__name').text('📌 ' + c.author);
+                    var av = item.find('img')[0];
+                    if (av && c.thumbnail) {
+                        av.onerror = function () { av.style.display = 'none'; };
+                        av.src = c.thumbnail;
+                    }
+                    box.append(item);
+                });
+                scroll.append(box);
+            }, function () {});
+        }
+
+        // --- страница канала ----------------------------------------------------
+
+        function drawChannel(view) {
+            drawLoading();
+
+            apiGet('/channel/' + view.id, {}, function (json) {
+                if (!json || !json.name) return drawEmpty('Канал недоступен', 'Не удалось получить данные о канале');
+
+                clear();
+
+                if (json.bannerUrl) {
+                    var banner = $('<div class="yt-banner"><img alt=""></div>');
+                    loadImage(banner, json.bannerUrl, '.yt-banner');
+                    scroll.append(banner);
+                }
+
+                var head = $('<div class="yt-channel"><img class="yt-channel__avatar" alt=""><div><div class="yt-channel__name"></div><div class="yt-channel__subs"></div><div class="yt-channel__subs"></div></div></div>');
+                head.find('.yt-channel__name').text(json.name + (json.verified ? ' ✓' : ''));
+                head.find('.yt-channel__subs').eq(0).text(json.subscriberCount >= 0 ? fmtNum(json.subscriberCount) + ' подписчиков' : '');
+                if (json.description) head.find('.yt-channel__subs').eq(1).text(json.description).css('opacity', 0.6).css('max-width', '40em');
+                var av = head.find('img')[0];
+                if (av && json.avatarUrl) {
+                    av.onerror = function () { av.style.display = 'none'; };
+                    av.src = json.avatarUrl;
+                }
+                scroll.append(head);
+
+                view.nextpage = json.nextpage || null;
+                view.tabs = json.tabs || [];
+                view.videos = (json.relatedStreams || []).map(normStream);
+
+                if (view.videos.length) {
+                    scroll.append(Lampa.Template.get('yt_secthead', { title: 'Видео' }));
+                    drawGrid(view.videos);
+                    appendMore(view);
+                    _this.loading(false);
+                } else {
+                    // На некоторых инстансах первый лист канала пустой — берём следующую страницу
+                    // или содержимое первой вкладки (shorts/стримы)
+                    loadChannelFallback(view);
+                }
+            }, function () {
+                drawEmpty('Канал недоступен', 'Не удалось получить данные о канале');
+            });
+        }
+
+        function loadChannelFallback(view) {
+            if (view.nextpage) {
+                apiGet('/nextpage/channel/' + view.id, { nextpage: view.nextpage }, function (json) {
+                    if (json && json.relatedStreams && json.relatedStreams.length) {
+                        view.nextpage = json.nextpage || null;
+                        view.videos = json.relatedStreams.map(normStream);
+                        scroll.append(Lampa.Template.get('yt_secthead', { title: 'Видео' }));
+                        drawGrid(view.videos);
+                        appendMore(view);
+                        _this.loading(false);
+                        return;
+                    }
+                    loadChannelTab(view);
+                }, function () { loadChannelTab(view); });
+            } else {
+                loadChannelTab(view);
+            }
+        }
+
+        function loadChannelTab(view) {
+            var tab = view.tabs && view.tabs.length ? view.tabs[0] : null;
+            if (!tab || !tab.data) {
+                if (view.videos.length) { appendMore(view); _this.loading(false); }
+                else drawEmpty('Видео не найдены', 'На канале нет видео или инстанс их не отдал');
+                return;
+            }
+
+            apiGet('/channels/tabs', { data: tab.data }, function (json) {
+                if (!json || !json.content || !json.content.length) {
+                    drawEmpty('Видео не найдены', 'На канале нет видео или инстанс их не отдал');
+                    return;
+                }
+                view.tabNextpage = json.nextpage || null;
+                scroll.append(Lampa.Template.get('yt_secthead', { title: tab.name == 'shorts' ? 'Shorts' : tab.name == 'livestreams' ? 'Трансляции' : 'Видео' }));
+                drawGrid(json.content);
+                appendMore(view);
+                _this.loading(false);
+            }, function () {
+                drawEmpty('Видео не найдены', 'На канале нет видео или инстанс их не отдал');
+            });
+        }
+
+        function loadMoreChannel(view) {
+            if (view.tabNextpage && view.tabs && view.tabs.length) {
+                apiGet('/channels/tabs', { data: view.tabs[0].data, nextpage: view.tabNextpage }, function (json) {
+                    if (!json || !json.content) return;
+                    view.tabNextpage = json.nextpage || null;
+                    scroll.render().find('.yt-more').remove();
+                    drawGrid(json.content);
+                    appendMore(view);
+                }, function () { scroll.render().find('.yt-more').remove(); });
+            } else if (view.nextpage) {
+                apiGet('/nextpage/channel/' + view.id, { nextpage: view.nextpage }, function (json) {
+                    if (!json || !json.relatedStreams) return;
+                    view.nextpage = json.nextpage || null;
+                    scroll.render().find('.yt-more').remove();
+                    drawGrid(json.relatedStreams);
+                    appendMore(view);
+                }, function () { scroll.render().find('.yt-more').remove(); });
+            }
+        }
+
+        // --- навигация ---------------------------------------------------------
 
         function openView(view) {
             stack.push(view);
@@ -640,208 +676,31 @@
 
         function renderView(view) {
             if (!view) return;
-            if (view.view == 'main') drawMain();
-            else if (view.view == 'channels') drawChannels(view.items, view.title);
-            else if (view.view == 'videos') drawVideos(view.items, view.title);
-            else if (view.view == 'auth') drawAuth();
-            else if (view.view == 'empty') drawEmpty(view.title, view.text);
+            if (view.view == 'home') drawHome();
+            else if (view.view == 'search') drawSearch(view);
+            else if (view.view == 'video') drawVideo(view);
+            else if (view.view == 'channel') drawChannel(view);
         }
 
-        function openCategory(cat) {
-            if (cat.id == 'search') {
-                try {
-                    Lampa.Input.edit({
-                        title: 'Поиск YouTube',
-                        value: '',
-                        free: true,
-                        nosave: true,
-                        nomic: true
-                    }, function (value) {
-                        if (value && value.trim()) searchVideos(value.trim());
-                    });
-                } catch (e) {}
-                return;
-            }
-
-            if (!loggedIn()) {
-                openView({ view: 'auth' });
-                return;
-            }
-
-            drawLoading();
-
-            if (cat.id == 'subs') loadSubscriptions();
-            else loadPlaylist(cat.id);
+        function openVideo(v) {
+            var id = v.id || videoId(v);
+            if (!id) return;
+            openView({ view: 'video', id: id });
         }
 
-        // --- загрузка данных ------------------------------------------------
-
-        function loadSubscriptions() {
-            apiGet('/subscriptions', { part: 'snippet', mine: 'true', maxResults: '50' }, function (json) {
-                var items = [];
-                try {
-                    (json.items || []).forEach(function (it) {
-                        var s = it.snippet || {};
-                        items.push({
-                            id: s.resourceId && s.resourceId.channelId,
-                            title: s.title || '',
-                            img: thumb(s, ['high', 'medium', 'default']),
-                            subs: Lampa.Utils.parseTime(s.publishedAt || '').full || ''
-                        });
-                    });
-                } catch (e) {}
-
-                openView({ view: 'channels', items: items, title: 'Подписки' });
-            }, function (e) {
-                openView({ view: 'empty', title: 'Подписки', text: errorText(e) });
-            });
+        function openChannel(id) {
+            if (!id) return;
+            openView({ view: 'channel', id: id });
         }
 
-        function loadChannelVideos(ch) {
-            drawLoading();
-
-            apiGet('/search', {
-                part: 'snippet',
-                channelId: ch.id,
-                type: 'video',
-                order: 'date',
-                maxResults: '50'
-            }, function (json) {
-                var items = parseSearch(json);
-                withDurations(items, ch.title);
-            }, function (e) {
-                openView({ view: 'empty', title: ch.title, text: errorText(e) });
-            });
+        function openSearch(query) {
+            openView({ view: 'search', query: query, filter: 'videos', nextpage: null });
         }
 
-        function loadPlaylist(kind) {
-            apiGet('/channels', { part: 'contentDetails', mine: 'true' }, function (json) {
-                var playlistId = '';
-                try {
-                    var rp = json.items && json.items[0] && json.items[0].contentDetails && json.items[0].contentDetails.relatedPlaylists;
-                    if (rp) playlistId = rp[kind] || '';
-                } catch (e) {}
-
-                if (!playlistId) {
-                    openView({ view: 'empty', title: titleOf(kind), text: 'Плейлист недоступен' });
-                    return;
-                }
-
-                apiGet('/playlistItems', { part: 'snippet', playlistId: playlistId, maxResults: '50' }, function (json2) {
-                    var items = [];
-                    try {
-                        (json2.items || []).forEach(function (it) {
-                            var s = it.snippet || {};
-                            items.push({
-                                id: s.resourceId && s.resourceId.videoId,
-                                title: s.title || '',
-                                channel: s.channelTitle || '',
-                                img: thumb(s),
-                                date: Lampa.Utils.parseTime(s.publishedAt || '').full || ''
-                            });
-                        });
-                    } catch (e) {}
-                    withDurations(items, titleOf(kind));
-                }, function (e2) {
-                    openView({ view: 'empty', title: titleOf(kind), text: errorText(e2) });
-                });
-            }, function (e) {
-                openView({ view: 'empty', title: titleOf(kind), text: errorText(e) });
-            });
-        }
-
-        function searchVideos(query) {
-            if (!loggedIn()) {
-                openView({ view: 'auth' });
-                return;
-            }
-
-            drawLoading();
-
-            apiGet('/search', {
-                part: 'snippet',
-                type: 'video',
-                maxResults: '25',
-                q: query
-            }, function (json) {
-                var items = parseSearch(json);
-                withDurations(items, 'Поиск: ' + query);
-            }, function (e) {
-                openView({ view: 'empty', title: 'Поиск', text: errorText(e) });
-            });
-        }
-
-        function parseSearch(json) {
-            var items = [];
-            try {
-                (json.items || []).forEach(function (it) {
-                    var s = it.snippet || {};
-                    var id = (it.id && (it.id.videoId || it.id.channelId)) || (s.resourceId && s.resourceId.videoId);
-                    if (id) {
-                        items.push({
-                            id: id,
-                            title: s.title || '',
-                            channel: s.channelTitle || '',
-                            img: thumb(s),
-                            date: Lampa.Utils.parseTime(s.publishedAt || '').full || ''
-                        });
-                    }
-                });
-            } catch (e) {}
-            return items;
-        }
-
-        function withDurations(items, title) {
-            var ids = items.map(function (v) { return v.id; }).filter(Boolean);
-            fetchDurations(ids, function (map) {
-                items.forEach(function (v) {
-                    if (map[v.id]) v.duration = map[v.id];
-                });
-                openView({ view: 'videos', items: items, title: title });
-            });
-        }
-
-        function titleOf(kind) {
-            var f = CATEGORIES.find(function (c) { return c.id == kind; });
-            return f ? f.title : 'YouTube';
-        }
-
-        function errorText(e) {
-            var msg = '';
-            try {
-                if (e && e.notoken) return 'Не выполнен вход в аккаунт';
-                msg = (e && e.responseJSON && (e.responseJSON.error && e.responseJSON.error.message || e.responseJSON.error)) || '';
-            } catch (err) {}
-            return msg || 'Не удалось загрузить данные';
-        }
-
-        // --- воспроизведение ------------------------------------------------
-
-        function playVideo(v) {
-            try {
-                var playlist = current_videos.map(function (c) {
-                    return {
-                        title: c.title,
-                        url: 'https://www.youtube.com/watch?v=' + c.id
-                    };
-                });
-
-                Lampa.Player.play({
-                    url: 'https://www.youtube.com/watch?v=' + v.id,
-                    title: v.title,
-                    youtube: true
-                });
-
-                if (playlist.length > 1) Lampa.Player.playlist(playlist);
-            } catch (e) {
-                notify('Ошибка воспроизведения');
-            }
-        }
-
-        // --- жизненный цикл -------------------------------------------------
+        // --- жизненный цикл ----------------------------------------------------
 
         this.initialize = function () {
-            openView({ view: 'main' });
+            openView({ view: 'home' });
         };
 
         this.start = function () {
@@ -857,19 +716,13 @@
                     Lampa.Controller.collectionSet(scroll.render());
                     Lampa.Controller.collectionFocus(last || false, scroll.render());
                 },
-                gone: function () {
-                    network.clear();
-                },
+                gone: function () { network.clear(); },
                 up: function () {
                     if (Navigator.canmove('up')) Navigator.move('up');
                     else Lampa.Controller.toggle('head');
                 },
-                down: function () {
-                    Navigator.move('down');
-                },
-                right: function () {
-                    if (Navigator.canmove('right')) Navigator.move('right');
-                },
+                down: function () { Navigator.move('down'); },
+                right: function () { if (Navigator.canmove('right')) Navigator.move('right'); },
                 left: function () {
                     if (Navigator.canmove('left')) Navigator.move('left');
                     else Lampa.Controller.toggle('menu');
@@ -886,13 +739,8 @@
             else Lampa.Activity.backward();
         };
 
-        this.pause = function () {
-            network.clear();
-        };
-
-        this.stop = function () {
-            network.clear();
-        };
+        this.pause = function () { network.clear(); };
+        this.stop = function () { network.clear(); };
 
         this.destroy = function () {
             network.clear();
@@ -902,23 +750,143 @@
     }
 
     // --------------------------------------------------------------------------
+    //  Настройки
+    // --------------------------------------------------------------------------
+
+    var cobaltStatusEl = null;
+
+    function updateCobaltStatus() {
+        if (!cobaltStatusEl || !cobaltStatusEl.length) return;
+        try {
+            var url = cobaltUrl();
+            cobaltStatusEl.text(url ? 'Экстрактор: ' + url : 'Экстрактор не настроен — воспроизведение до 720p');
+        } catch (e) {}
+    }
+
+    function showCobaltInstructions() {
+        var html = $(
+            '<div class="about" style="line-height:1.6">' +
+            '<div>Для воспроизведения в максимальном качестве (вплоть до 4K) нужен свой сервер <b>cobalt</b>. Публичный api.cobalt.tools больше не отдаёт YouTube, поэтому разворачиваем свой — одна команда:</div>' +
+            '<div style="background:rgba(0,0,0,0.4);border-radius:0.4em;padding:0.8em;margin:0.8em 0;font-family:monospace;font-size:0.85em;white-space:pre-wrap">docker run -d --name cobalt -p 9000:9000 ghcr.io/imputnet/cobalt</div>' +
+            '<div>После запуска укажите в настройках URL: <b>http://IP-сервера:9000</b></div>' +
+            '<div style="margin-top:0.6em;opacity:0.7">cobalt отдаёт готовый mp4 в исходном качестве. Без него плагин откатывается на поток Piped (до 720p) или встроенный плеер.</div>' +
+            '</div>'
+        );
+
+        try {
+            Lampa.Modal.open({ title: 'Настройка cobalt для 4K', html: html, size: 'medium' });
+        } catch (e) {}
+    }
+
+    function addSettings() {
+        Lampa.SettingsApi.addComponent({
+            component: COMPONENT,
+            icon: "<svg height=\"36\" viewBox=\"0 0 36 36\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\">\n                <rect x=\"1\" y=\"6\" width=\"34\" height=\"24\" rx=\"5\" fill=\"#FF0000\"/>\n                <path d=\"M15 13.5v9l7.5-4.5-7.5-4.5z\" fill=\"#fff\"/>\n            </svg>",
+            name: 'YouTube'
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: COMPONENT,
+            param: { type: 'title' },
+            field: { name: 'Воспроизведение' }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: COMPONENT,
+            param: { type: 'button' },
+            field: {
+                name: 'Как получить 4K (cobalt)',
+                description: 'Инструкция по запуску своего сервера cobalt в Docker'
+            },
+            onChange: function () { showCobaltInstructions(); }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: COMPONENT,
+            param: { name: 'yt_cobalt_url', type: 'input', default: '' },
+            field: {
+                name: 'URL сервера cobalt',
+                description: 'Например: http://192.168.1.100:9000'
+            },
+            onChange: function () { updateCobaltStatus(); }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: COMPONENT,
+            param: { name: 'yt_cobalt_key', type: 'input', default: '' },
+            field: {
+                name: 'API-ключ cobalt (необязательно)',
+                description: 'Только если сервер требует авторизацию'
+            }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: COMPONENT,
+            param: {
+                name: 'yt_quality',
+                type: 'select',
+                values: (function () { var o = {}; QUALITIES.forEach(function (q) { o[q.q] = q.title; }); return o; })(),
+                default: '2160'
+            },
+            field: {
+                name: 'Качество по умолчанию',
+                description: 'Используется при воспроизведении через cobalt'
+            }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: COMPONENT,
+            param: { type: 'button' },
+            field: { name: 'Статус экстрактора' },
+            onRender: function (item) {
+                cobaltStatusEl = $('<div class="settings-param__descr"></div>');
+                item.append(cobaltStatusEl);
+                updateCobaltStatus();
+            }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: COMPONENT,
+            param: { type: 'title' },
+            field: { name: 'Контент' }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: COMPONENT,
+            param: { name: 'yt_piped_url', type: 'input', default: DEFAULT_PIPED },
+            field: {
+                name: 'URL API Piped',
+                description: 'Можно заменить на свой или другой публичный инстанс'
+            }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: COMPONENT,
+            param: {
+                name: 'yt_region',
+                type: 'select',
+                values: REGIONS,
+                default: 'RU'
+            },
+            field: { name: 'Регион трендов' }
+        });
+    }
+
+    // --------------------------------------------------------------------------
     //  Пункт главного меню
     // --------------------------------------------------------------------------
 
     function addMenuItem(body) {
         var list = body.find('.menu__list:eq(0)');
         if (!list || !list.length) list = body;
-
         if (list.find('[data-action="youtube"]').length) return;
 
-        var item = $(
+        list.append(
             '<li class="menu__item selector" data-action="youtube">' +
-            '<div class="menu__ico">' + ICON_PLAY + '</div>' +
+            '<div class="menu__ico"><svg viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="1" y="6" width="34" height="24" rx="5" fill="#FF0000"/><path d="M15 13.5v9l7.5-4.5-7.5-4.5z" fill="#fff"/></svg></div>' +
             '<div class="menu__text">YouTube</div>' +
             '</li>'
         );
-
-        list.append(item);
     }
 
     function openYouTube() {
@@ -938,9 +906,7 @@
     function followMenu() {
         Lampa.Listener.follow('menu', function (e) {
             if (e.type == 'start' && e.body) {
-                try {
-                    addMenuItem($(e.body));
-                } catch (err) {}
+                try { addMenuItem($(e.body)); } catch (err) {}
             } else if (e.type == 'action' && e.action == 'youtube') {
                 e.abort();
                 openYouTube();
@@ -953,34 +919,21 @@
     // --------------------------------------------------------------------------
 
     function start() {
-        try {
-            addTemplates();
-            $('body').append(Lampa.Template.get('yt_css', {}, true));
-        } catch (e) {}
-
-        try {
-            addSettings();
-        } catch (e) {}
-
-        try {
-            followMenu();
-        } catch (e) {}
-
-        try {
-            if (loggedIn()) loadAccount(updateStatus);
-        } catch (e) {}
+        try { addTemplates(); $('body').append(Lampa.Template.get('yt_css', {}, true)); } catch (e) {}
+        try { addSettings(); } catch (e) {}
+        try { followMenu(); } catch (e) {}
     }
 
     Lampa.Manifest.plugins = {
         type: 'video',
-        version: '1.0.0',
+        version: '2.0.0',
         name: 'YouTube',
-        description: 'Просмотр YouTube с авторизацией через личный аккаунт Google',
+        description: 'Полноценный клиент YouTube: тренды, поиск, видео и каналы + воспроизведение в 4K через cobalt',
         component: COMPONENT,
         onContextMenu: function () {
             return {
                 name: 'YouTube',
-                description: 'Подписки, история, поиск YouTube'
+                description: 'Тренды, поиск, каналы'
             };
         },
         onContextLauch: function () {
