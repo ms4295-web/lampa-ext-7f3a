@@ -319,6 +319,7 @@
         var stack = [];
         var last = false;
         var initialized = false;
+        var controllerReady = false;
 
         var _this = this;
 
@@ -479,42 +480,47 @@
         // --- страница видео ----------------------------------------------------
 
         function drawVideo(view) {
-            drawLoading();
+            // Отрисовываем страницу немедленно из данных карточки — Piped /streams
+            // часто блокируется YouTube (Sign in to confirm you're not a bot),
+            // а для воспроизведения через cobalt он и не нужен.
+            var v = view.video || normStream({ url: '/watch?v=' + view.id, title: '' });
 
-            apiGet('/streams/' + view.id, {}, function (json) {
-                if (!json || !json.title) return drawEmpty('Видео недоступно', 'Не удалось получить данные о видео');
+            clear();
 
-                clear();
+            var hero = Lampa.Template.get('yt_hero', { duration: esc(fmtDur(v.duration)) });
+            loadImage(hero, v.thumb, '.yt-hero');
+            bind(hero, function () { playVideo(v); }, function () { showQualityMenu(v); });
+            scroll.append(hero);
 
-                var hero = Lampa.Template.get('yt_hero', { duration: esc(fmtDur(json.duration)) });
-                loadImage(hero, json.thumbnailUrl, '.yt-hero');
-                bind(hero, function () { playVideo(normStream({ url: '/watch?v=' + view.id, title: json.title })); }, function () { showQualityMenu(normStream({ url: '/watch?v=' + view.id, title: json.title })); });
-                scroll.append(hero);
+            scroll.append($('<div class="yt-vtitle">' + esc(v.title || 'Видео') + '</div>'));
 
-                scroll.append($('<div class="yt-vtitle">' + esc(json.title) + '</div>'));
+            var meta = [];
+            if (v.uploader) meta.push(v.uploader);
+            if (v.views >= 0) meta.push(fmtNum(v.views) + ' просмотров');
+            if (v.uploadedDate) meta.push(v.uploadedDate);
+            if (meta.length) scroll.append($('<div class="yt-vmeta">' + esc(meta.join(' • ')) + '</div>'));
 
-                var meta = [];
-                if (json.views >= 0) meta.push(fmtNum(json.views) + ' просмотров');
-                if (json.uploadDate) meta.push(fmtDate(json.uploadDate));
-                if (json.likes >= 0) meta.push('👍 ' + fmtNum(json.likes));
-                scroll.append($('<div class="yt-vmeta">' + esc(meta.join(' • ')) + '</div>'));
-
-                if (json.uploader) {
-                    var ch = $('<div class="yt-channel selector"><img class="yt-channel__avatar" alt=""><div><div class="yt-channel__name"></div><div class="yt-channel__subs"></div></div></div>');
-                    ch.find('.yt-channel__name').text(json.uploader + (json.uploaderVerified ? ' ✓' : ''));
-                    ch.find('.yt-channel__subs').text(json.uploaderSubscriberCount >= 0 ? fmtNum(json.uploaderSubscriberCount) + ' подписчиков' : '');
-                    var av = ch.find('img')[0];
-                    if (av && json.uploaderAvatar) {
-                        av.onerror = function () { av.style.display = 'none'; };
-                        av.src = json.uploaderAvatar;
-                    }
-                    ch.on('hover:enter', function () {
-                        var m = String(json.uploaderUrl || '').match(/\/channel\/([^/?]+)/);
-                        if (m) openChannel(m[1]);
-                    });
-                    ch.on('hover:focus', function (e) { last = e.target; scroll.update($(e.target), true); });
-                    scroll.append(ch);
+            if (v.uploader) {
+                var ch = $('<div class="yt-channel selector"><img class="yt-channel__avatar" alt=""><div><div class="yt-channel__name"></div><div class="yt-channel__subs"></div></div></div>');
+                ch.find('.yt-channel__name').text(v.uploader);
+                var chId = channelId({ url: v.uploaderUrl });
+                ch.find('.yt-channel__subs').text(chId ? 'Перейти на канал' : '');
+                var av = ch.find('img')[0];
+                if (av && v.uploaderAvatar) {
+                    av.onerror = function () { av.style.display = 'none'; };
+                    av.src = v.uploaderAvatar;
                 }
+                ch.on('hover:enter', function () { if (chId) openChannel(chId); });
+                ch.on('hover:focus', function (e) { last = e.target; scroll.update($(e.target), true); });
+                scroll.append(ch);
+            }
+
+            _this.loading(false);
+
+            // Дополнительная информация (описание, похожие, комментарии) — если Piped
+            // доступен. Не блокируем страницу при ошибке.
+            apiGet('/streams/' + view.id, {}, function (json) {
+                if (!json || !json.title) return;
 
                 if (json.description) {
                     var desc = $('<div class="yt-desc"></div>');
@@ -528,11 +534,7 @@
                 }
 
                 loadComments(view.id);
-
-                _this.loading(false);
-            }, function () {
-                drawEmpty('Видео недоступно', 'Не удалось получить данные о видео');
-            });
+            }, function () { /* доп. информация недоступна — страница уже отрисована */ });
         }
 
         function loadComments(id) {
@@ -680,12 +682,36 @@
             else if (view.view == 'search') drawSearch(view);
             else if (view.view == 'video') drawVideo(view);
             else if (view.view == 'channel') drawChannel(view);
+
+            // Обновляем навигацию: после перерисовки_scroll нужно заново
+            // собрать коллекцию фокусируемых элементов
+            try {
+                Lampa.Controller.add('content', {
+                    toggle: function () {
+                        Lampa.Controller.collectionSet(scroll.render());
+                        Lampa.Controller.collectionFocus(last || false, scroll.render());
+                    },
+                    gone: function () { network.clear(); },
+                    up: function () {
+                        if (Navigator.canmove('up')) Navigator.move('up');
+                        else Lampa.Controller.toggle('head');
+                    },
+                    down: function () { Navigator.move('down'); },
+                    right: function () { if (Navigator.canmove('right')) Navigator.move('right'); },
+                    left: function () {
+                        if (Navigator.canmove('left')) Navigator.move('left');
+                        else Lampa.Controller.toggle('menu');
+                    },
+                    back: function () { _this.back(); }
+                });
+                Lampa.Controller.toggle('content');
+            } catch (e) {}
         }
 
         function openVideo(v) {
             var id = v.id || videoId(v);
             if (!id) return;
-            openView({ view: 'video', id: id });
+            openView({ view: 'video', id: id, video: v });
         }
 
         function openChannel(id) {
@@ -711,26 +737,11 @@
                 this.initialize();
             }
 
-            Lampa.Controller.add('content', {
-                toggle: function () {
-                    Lampa.Controller.collectionSet(scroll.render());
-                    Lampa.Controller.collectionFocus(last || false, scroll.render());
-                },
-                gone: function () { network.clear(); },
-                up: function () {
-                    if (Navigator.canmove('up')) Navigator.move('up');
-                    else Lampa.Controller.toggle('head');
-                },
-                down: function () { Navigator.move('down'); },
-                right: function () { if (Navigator.canmove('right')) Navigator.move('right'); },
-                left: function () {
-                    if (Navigator.canmove('left')) Navigator.move('left');
-                    else Lampa.Controller.toggle('menu');
-                },
-                back: this.back.bind(this)
-            });
-
-            Lampa.Controller.toggle('content');
+            // Навигация регистрируется в renderView() при каждой перерисовке
+            if (!controllerReady) {
+                controllerReady = true;
+                Lampa.Controller.toggle('content');
+            }
         };
 
         this.back = function () {
