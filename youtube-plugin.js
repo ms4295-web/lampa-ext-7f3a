@@ -356,9 +356,28 @@
                 else {
                     this.activity.loader(false);
                     this.activity.toggle();
-                    //after async content load, the navigation collection is stale — rebuild it
-                    Lampa.Controller.collectionSet(scroll.render());
-                    Lampa.Controller.collectionFocus(last || false, scroll.render());
+                    // ActivitySlide.start() перерегистрировал свой невидимый
+                    // content-контроллер поверх нашего и переключился на него.
+                    // Перехватываем управление обратно после асинхронной загрузки.
+                    Lampa.Controller.add('content', {
+                        toggle: function () {
+                            Lampa.Controller.collectionSet(scroll.render());
+                            Lampa.Controller.collectionFocus(last || false, scroll.render());
+                        },
+                        gone: function () { network.clear(); },
+                        up: function () {
+                            if (Navigator.canmove('up')) Navigator.move('up');
+                            else Lampa.Controller.toggle('head');
+                        },
+                        down: function () { Navigator.move('down'); },
+                        right: function () { if (Navigator.canmove('right')) Navigator.move('right'); },
+                        left: function () {
+                            if (Navigator.canmove('left')) Navigator.move('left');
+                            else Lampa.Controller.toggle('menu');
+                        },
+                        back: function () { _this.back(); }
+                    });
+                    Lampa.Controller.toggle('content');
                 }
             } catch (e) {}
         };
@@ -712,30 +731,6 @@
             else if (view.view == 'search') drawSearch(view);
             else if (view.view == 'video') drawVideo(view);
             else if (view.view == 'channel') drawChannel(view);
-
-            // Обновляем навигацию: после перерисовки_scroll нужно заново
-            // собрать коллекцию фокусируемых элементов
-            try {
-                Lampa.Controller.add('content', {
-                    toggle: function () {
-                        Lampa.Controller.collectionSet(scroll.render());
-                        Lampa.Controller.collectionFocus(last || false, scroll.render());
-                    },
-                    gone: function () { network.clear(); },
-                    up: function () {
-                        if (Navigator.canmove('up')) Navigator.move('up');
-                        else Lampa.Controller.toggle('head');
-                    },
-                    down: function () { Navigator.move('down'); },
-                    right: function () { if (Navigator.canmove('right')) Navigator.move('right'); },
-                    left: function () {
-                        if (Navigator.canmove('left')) Navigator.move('left');
-                        else Lampa.Controller.toggle('menu');
-                    },
-                    back: function () { _this.back(); }
-                });
-                Lampa.Controller.toggle('content');
-            } catch (e) {}
         }
 
         function openVideo(v) {
@@ -766,9 +761,7 @@
                 initialized = true;
                 this.initialize();
             }
-
-            // Навигация регистрируется в renderView() при каждой перерисовке
-            Lampa.Controller.toggle('content');
+            // Навигацию перехватываем в loading(false) после асинхронной загрузки
         };
 
         this.back = function () {
