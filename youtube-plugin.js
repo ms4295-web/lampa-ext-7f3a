@@ -145,15 +145,11 @@
     //  Воспроизведение: cobalt -> Piped -> нативный плеер
     // --------------------------------------------------------------------------
 
-    function playStream(video, quality, call) {
-        var url = cobaltUrl();
-        var id = video.id || videoId(video);
-
-        if (!url) return fallbackPlay(video, call);
-
+    // Запрос одного качества у cobalt
+    function cobaltFetch(url, id, quality, call) {
         var body = {
             url: YT_WATCH + id,
-            videoQuality: quality || defaultQuality(),
+            videoQuality: quality,
             youtubeVideoCodec: 'h264',
             youtubeVideoContainer: 'mp4',
             filenameStyle: 'basic'
@@ -165,22 +161,51 @@
         var net = new Network();
         net.timeout(60000);
         net.silent(url, function (res) {
-            if (res && (res.status == 'tunnel' || res.status == 'redirect') && res.url) {
-                Lampa.Player.play({
-                    url: res.url,
-                    title: video.title,
-                    quality: (quality || defaultQuality()) + 'p'
-                });
-                if (call) call(true);
-            } else if (call) call(false);
-        }, function () {
-            if (call) call(false);
-        }, JSON.stringify(body), {
+            if (res && (res.status == 'tunnel' || res.status == 'redirect') && res.url) call(res.url);
+            else call(false);
+        }, function () { call(false); }, JSON.stringify(body), {
             headers: headers,
             contentType: 'application/json',
             processData: false,
             dataType: 'json',
             timeout: 60000
+        });
+    }
+
+    function playStream(video, quality, call) {
+        var url = cobaltUrl();
+        var id = video.id || videoId(video);
+
+        if (!url) return fallbackPlay(video, call);
+
+        var q = quality || defaultQuality();
+
+        // Запрашиваем выбранное качество и все выше — плеер покажет их все
+        var want = QUALITIES.filter(function (x) { return parseInt(x.q, 10) >= parseInt(q, 10); }).map(function (x) { return x.q; });
+        if (want.indexOf(q) < 0) want.unshift(q);
+
+        var result = {};
+        var done = 0;
+
+        want.forEach(function (w) {
+            cobaltFetch(url, id, w, function (res) {
+                if (res) result[w + 'p'] = res;
+                done++;
+                if (done >= want.length) {
+                    var keys = Object.keys(result);
+                    if (!keys.length) { if (call) call(false); return; }
+
+                    var best = keys[0];
+                    keys.forEach(function (k) { if (parseInt(k, 10) > parseInt(best, 10)) best = k; });
+
+                    Lampa.Player.play({
+                        url: result[best],
+                        title: video.title,
+                        quality: keys.length > 1 ? result : undefined
+                    });
+                    if (call) call(true);
+                }
+            });
         });
     }
 
@@ -329,7 +354,13 @@
         this.loading = function (status) {
             try {
                 if (status) this.activity.loader(true);
-                else { this.activity.loader(false); this.activity.toggle(); }
+                else {
+                    this.activity.loader(false);
+                    this.activity.toggle();
+                    //after async content load, the navigation collection is stale — rebuild it
+                    Lampa.Controller.collectionSet(scroll.render());
+                    Lampa.Controller.collectionFocus(last || false, scroll.render());
+                }
             } catch (e) {}
         };
 
@@ -814,7 +845,7 @@
 
         Lampa.SettingsApi.addParam({
             component: COMPONENT,
-            param: { name: 'yt_cobalt_url', type: 'input', default: '' },
+            param: { name: 'yt_cobalt_url', type: 'input', values: { '': '' }, default: '' },
             field: {
                 name: 'URL сервера cobalt',
                 description: 'Например: http://192.168.1.100:9000'
@@ -824,7 +855,7 @@
 
         Lampa.SettingsApi.addParam({
             component: COMPONENT,
-            param: { name: 'yt_cobalt_key', type: 'input', default: '' },
+            param: { name: 'yt_cobalt_key', type: 'input', values: { '': '' }, default: '' },
             field: {
                 name: 'API-ключ cobalt (необязательно)',
                 description: 'Только если сервер требует авторизацию'
@@ -864,7 +895,7 @@
 
         Lampa.SettingsApi.addParam({
             component: COMPONENT,
-            param: { name: 'yt_piped_url', type: 'input', default: DEFAULT_PIPED },
+            param: { name: 'yt_piped_url', type: 'input', values: { '': '' }, default: DEFAULT_PIPED },
             field: {
                 name: 'URL API Piped',
                 description: 'Можно заменить на свой или другой публичный инстанс'
