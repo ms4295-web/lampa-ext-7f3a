@@ -344,7 +344,6 @@
         var stack = [];
         var last = false;
         var initialized = false;
-        var controllerReady = false;
 
         var _this = this;
 
@@ -769,10 +768,7 @@
             }
 
             // Навигация регистрируется в renderView() при каждой перерисовке
-            if (!controllerReady) {
-                controllerReady = true;
-                Lampa.Controller.toggle('content');
-            }
+            Lampa.Controller.toggle('content');
         };
 
         this.back = function () {
@@ -845,20 +841,44 @@
 
         Lampa.SettingsApi.addParam({
             component: COMPONENT,
-            param: { name: 'yt_cobalt_url', type: 'input', values: { '': '' }, default: '' },
+            param: { name: 'yt_cobalt_url', type: 'button' },
             field: {
                 name: 'URL сервера cobalt',
-                description: 'Например: http://192.168.1.100:9000'
+                description: 'Нажмите, чтобы ввести адрес сервера cobalt'
             },
-            onChange: function () { updateCobaltStatus(); }
+            onChange: function () {
+                Lampa.Input.edit({
+                    title: 'URL сервера cobalt',
+                    value: Lampa.Storage.get('yt_cobalt_url', ''),
+                    free: true,
+                    nosave: true,
+                    nomic: true
+                }, function (value) {
+                    Lampa.Storage.set('yt_cobalt_url', (value || '').trim());
+                    updateCobaltStatus();
+                    Lampa.Noty.show('URL cobalt сохранён');
+                });
+            }
         });
 
         Lampa.SettingsApi.addParam({
             component: COMPONENT,
-            param: { name: 'yt_cobalt_key', type: 'input', values: { '': '' }, default: '' },
+            param: { name: 'yt_cobalt_key', type: 'button' },
             field: {
                 name: 'API-ключ cobalt (необязательно)',
-                description: 'Только если сервер требует авторизацию'
+                description: 'Нажмите, чтобы ввести ключ'
+            },
+            onChange: function () {
+                Lampa.Input.edit({
+                    title: 'API-ключ cobalt',
+                    value: Lampa.Storage.get('yt_cobalt_key', ''),
+                    free: true,
+                    nosave: true,
+                    nomic: true
+                }, function (value) {
+                    Lampa.Storage.set('yt_cobalt_key', (value || '').trim());
+                    Lampa.Noty.show('Ключ cobalt сохранён');
+                });
             }
         });
 
@@ -895,10 +915,22 @@
 
         Lampa.SettingsApi.addParam({
             component: COMPONENT,
-            param: { name: 'yt_piped_url', type: 'input', values: { '': '' }, default: DEFAULT_PIPED },
+            param: { name: 'yt_piped_url', type: 'button' },
             field: {
                 name: 'URL API Piped',
-                description: 'Можно заменить на свой или другой публичный инстанс'
+                description: 'Нажмите, чтобы изменить инстанс Piped'
+            },
+            onChange: function () {
+                Lampa.Input.edit({
+                    title: 'URL API Piped',
+                    value: Lampa.Storage.get('yt_piped_url', DEFAULT_PIPED),
+                    free: true,
+                    nosave: true,
+                    nomic: true
+                }, function (value) {
+                    Lampa.Storage.set('yt_piped_url', (value || '').trim() || DEFAULT_PIPED);
+                    Lampa.Noty.show('URL Piped сохранён');
+                });
             }
         });
 
